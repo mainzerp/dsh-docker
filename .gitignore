@@ -1,0 +1,4 @@
+.env
+docs/SubAgent/
+workspace/*
+!workspace/.gitkeep

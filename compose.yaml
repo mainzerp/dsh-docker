@@ -1,0 +1,28 @@
+services:
+  dsh:
+    build:
+      context: .
+      args:
+        DSH_VERSION: ${DSH_VERSION:-latest}
+        GH_VERSION: ${GH_VERSION:-2.97.0}
+        PLAYWRIGHT_VERSION: ${PLAYWRIGHT_VERSION:-1.62.1}
+        UV_VERSION: ${UV_VERSION:-0.12.5}
+    image: dsh-docker:latest
+    container_name: dsh
+    ports:
+      - "3080:3080"
+    environment:
+      TRUSTED_HOSTS: ${TRUSTED_HOSTS:-}
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - dsh-data:/data
+      - dsh-workspace:/workspace
+    restart: unless-stopped
+    init: true
+    shm_size: 1gb
+
+volumes:
+  dsh-data:
+  dsh-workspace:
