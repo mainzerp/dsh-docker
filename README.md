@@ -27,6 +27,22 @@ TRUSTED_HOSTS=192.168.1.10:3080,myserver:3080
 
 Then run `docker compose up -d` again.
 
+## Exposure beyond your own network
+
+The WebUI has no built-in authentication — anyone who can reach port 3080 gets a
+fully agent-capable session. Do **not** expose it directly to the internet or an
+untrusted network.
+
+If you need access from outside your own network, put a reverse proxy with
+authentication in front of it (HTTPS-terminating, e.g. Traefik, Caddy, or nginx
+with forward auth / basic auth, or an SSO layer such as Authelia or
+oauth2-proxy), and:
+
+- bind the port to localhost only (`"127.0.0.1:3080:3080"` in `compose.yaml`)
+  and proxy to it, or restrict the port to the proxy's docker network instead of
+  publishing it at all
+- add the public hostname to `TRUSTED_HOSTS` (e.g. `dsh.example.com:443`)
+
 ## Persistence
 
 | Path | Contents |
