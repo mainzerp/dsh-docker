@@ -1,0 +1,87 @@
+name: dsh-update
+
+# Checks the npm registry for a new @deepseek-ai/dsh release and rebuilds the
+# image only when that version has not been published yet (checked via the
+# dsh-<version> tag on GHCR). Publishes `latest` + `dsh-<version>` tags.
+# Release builds with semver tags stay in docker.yml.
+#
+# Caveat: GitHub disables scheduled workflows after 60 days of repository
+# inactivity — re-enable via the Actions tab if that happens.
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: dsh-update
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.dsh.outputs.version }}
+      build: ${{ steps.dsh.outputs.build }}
+    steps:
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compare npm latest against published image tags
+        id: dsh
+        run: |
+          version=$(curl -fsSL https://registry.npmjs.org/@deepseek-ai/dsh | jq -r '."dist-tags".latest')
+          if [ -z "$version" ] || [ "$version" = "null" ]; then
+            echo "Failed to resolve dsh version from npm registry" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          image="ghcr.io/${{ github.repository }}:dsh-${version}"
+          if docker manifest inspect "$image" > /dev/null 2>&1; then
+            echo "dsh ${version} already published (${image}) - skipping build"
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "dsh ${version} not yet published - building"
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: check
+    if: needs.check.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=latest
+            type=raw,value=dsh-${{ needs.check.outputs.version }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          build-args: |
+            DSH_VERSION=${{ needs.check.outputs.version }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
