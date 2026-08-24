@@ -39,6 +39,14 @@ RUN corepack enable && corepack prepare pnpm@latest --activate
 ARG DSH_VERSION=latest
 RUN npm install -g "@deepseek-ai/dsh@${DSH_VERSION}"
 
+# Remote-configuration patch (opt-in at runtime via DSH_ALLOW_REMOTE_CONFIGURATION=1).
+# dsh pins settings/credentials/agent-preset management to loopback by design; this
+# lets the configuration surface accept TRUSTED_HOSTS instead. Fail-closed: the
+# script warns and skips when upstream patterns change. Only enable behind an
+# authenticating reverse proxy — see README "Remote configuration".
+COPY patches/enable-remote-configuration.mjs /usr/local/lib/dsh-patches/enable-remote-configuration.mjs
+RUN node /usr/local/lib/dsh-patches/enable-remote-configuration.mjs "$(npm root -g)/@deepseek-ai/dsh"
+
 # Playwright + Chromium for the agent (web-app testing, screenshots, scraping).
 # Global install so library + CLI are on PATH; browsers are version-locked to the
 # npm package version, so PLAYWRIGHT_VERSION is pinned like GH_VERSION/DSH_VERSION.

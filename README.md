@@ -11,6 +11,25 @@ docker compose up -d --build
 
 WebUI: `http://localhost:3080` or `http://<lan-host>:3080`.
 
+### Prebuilt image
+
+To skip the local build and use the image published to GHCR instead:
+
+```sh
+docker compose -f compose.prebuilt.yaml up -d
+```
+
+The prebuilt image is `ghcr.io/mainzerp/dsh-docker` (tags: `latest`, `x.y`, `x.y.z`,
+built on every release). Version pinning works via the image tag — the `DSH_VERSION` /
+`GH_VERSION` / `PLAYWRIGHT_VERSION` / `UV_VERSION` build args only apply to the local
+build in `compose.yaml`.
+
+A scheduled workflow (`.github/workflows/dsh-update.yml`, daily) rebuilds the image
+automatically when a new `@deepseek-ai/dsh` version appears on npm, publishing
+`latest` + `dsh-<version>` tags (e.g. `dsh-0.1.0-rc.7`). Pin to a specific dsh
+version via `image: ghcr.io/mainzerp/dsh-docker:dsh-<version>` in
+`compose.prebuilt.yaml`; `latest` always tracks the newest dsh release.
+
 ## LAN access
 
 `dsh web` intentionally binds only to `127.0.0.1` (the CLI rejects `--host 0.0.0.0`).
@@ -42,6 +61,30 @@ oauth2-proxy), and:
   and proxy to it, or restrict the port to the proxy's docker network instead of
   publishing it at all
 - add the public hostname to `TRUSTED_HOSTS` (e.g. `dsh.example.com:443`)
+
+### Remote configuration
+
+dsh pins the settings/credentials/agent-preset management surface to loopback
+by design (until upstream ships a real auth layer). Browsers opening the WebUI
+via a non-localhost authority — LAN IP or proxy hostname — therefore see
+"settings are unavailable in this browser", and `TRUSTED_HOSTS` does not change
+that.
+
+Two ways to manage settings remotely:
+
+- **SSH tunnel (no trade-offs):** `ssh -L 3080:localhost:3080 user@host`, then
+  open `http://localhost:3080` — loopback authorities get the full UI.
+- **Opt-in patch:** the image ships `patches/enable-remote-configuration.mjs`
+  (adapted from StefanKhor/deepseek-harness-docker, MIT), which lets the
+  configuration methods accept `TRUSTED_HOSTS`. Enable with
+  `DSH_ALLOW_REMOTE_CONFIGURATION=1` in `.env` and recreate the container.
+  **Only behind an authenticating reverse proxy** — anyone who can reach the
+  WebUI can then read and change settings and credentials.
+
+Note: the browser-side half of the patch is applied at image build time. With
+the env flag unset (default), remote browsers get `HTTP 403` transport failures
+on the settings surfaces instead of the "unavailable" message — same behavior,
+noisier wording.
 
 ## Persistence
 
