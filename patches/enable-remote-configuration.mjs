@@ -2,10 +2,14 @@
  * Docker compatibility patch for DeepSeek Harness (fail-closed).
  *
  * dsh pins the privileged configuration surface (settings.*, credentials.*,
- * llm.discoverModels) to loopback by design, and the browser bundle derives
- * connection.isLoopback from window.location.hostname. Any non-localhost
- * authority (LAN IP, reverse proxy hostname) therefore shows
+ * llm.discoverModels, agentPreset.read/copy/remove) to loopback by design, and
+ * the browser bundle derives connection.isLoopback from window.location.hostname.
+ * Any non-localhost authority (LAN IP, reverse proxy hostname) therefore shows
  * "settings are unavailable in this browser".
+ *
+ * Deliberately NOT lifted: agentPreset.openDocument, settings.openDocument,
+ * host.pickDirectory, host.openPath — they drive the host desktop, which does
+ * not exist in a container.
  *
  * 1) Server (dsh-client-connection/lib/index.js): DSH_ALLOW_REMOTE_CONFIGURATION=1
  *    lets the configuration methods accept the configured trustedHosts.
@@ -69,7 +73,10 @@ const REMOTE_CONFIGURATION_METHODS = new Set([
 \t"credentials.describe",
 \t"credentials.set",
 \t"credentials.unset",
-\t"llm.discoverModels"
+\t"llm.discoverModels",
+\t"agentPreset.read",
+\t"agentPreset.copy",
+\t"agentPreset.remove"
 ]);`
         )
         server = server.replace(original, patchedMethods)
