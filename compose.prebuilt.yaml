@@ -1,0 +1,25 @@
+# Uses the prebuilt image from GHCR instead of building locally.
+# Start: docker compose -f compose.prebuilt.yaml up -d
+# Version pinning happens via the image tag (e.g. ghcr.io/mainzerp/dsh-docker:0.1),
+# not via DSH_VERSION build args — those only apply to the local build in compose.yaml.
+services:
+  dsh:
+    image: ghcr.io/mainzerp/dsh-docker:latest
+    container_name: dsh
+    ports:
+      - "3080:3080"
+    environment:
+      TRUSTED_HOSTS: ${TRUSTED_HOSTS:-}
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - dsh-data:/data
+      - dsh-workspace:/workspace
+    restart: unless-stopped
+    init: true
+    shm_size: 1gb
+
+volumes:
+  dsh-data:
+  dsh-workspace:
