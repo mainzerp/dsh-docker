@@ -11,6 +11,12 @@ docker compose up -d --build
 
 WebUI: `http://localhost:3080` or `http://<lan-host>:3080`.
 
+All runtime variables (see `.env.example`) are passed through from the shell
+environment as well as from `.env` (`GH_TOKEN=... docker compose up -d`);
+a variable set in neither place is omitted from the container entirely. Env
+changes require recreating the container
+(`docker compose up -d --force-recreate`) — `restart` does not re-read them.
+
 ### Prebuilt image
 
 To skip the local build and use the image published to GHCR instead:
@@ -91,7 +97,11 @@ noisier wording.
 | Path | Contents |
 | ---- | -------- |
 | Volume `dsh-data` -> `/data` | `$DSH_HOME`: profiles, installed plugins, `.credentials.yaml`, `.env` |
-| Volume `dsh-workspace` -> `/workspace` | Workspace root of the agent; create workspaces here (`/workspace/<name>`) |
+| Volume `dsh-home` -> `/home/node` | Agent home: workspaces (the WebUI creates them here), `gh` auth, `.gitconfig`, tool caches |
+
+Everything outside these two volumes lives in the container layer and is lost
+on recreation (`--force-recreate`, image updates). Keep all mutable state under
+`/data` or `/home/node`.
 
 Install plugins with `docker compose exec dsh dsh plugin --profile web add <pkg>`;
 they live in `/data/profiles/web/` and survive container restarts and image rebuilds.
@@ -132,11 +142,30 @@ Authenticating with GitHub:
 
 ```sh
 docker compose exec dsh gh auth login        # interactive (device flow)
-# or a token via .env: GH_TOKEN=ghp_... or GITHUB_TOKEN=...
+# or bootstrap from the GH_TOKEN env var (token never printed):
+docker compose exec dsh sh -c 'printenv GH_TOKEN | gh auth login --with-token'
 ```
 
-For commits, set the identity via `.env` (git reads these variables automatically;
-they survive container recreation):
+The token needs the scopes `repo` and `read:org` (plus `workflow` to push
+workflow files). `gh` stores its credentials in `~/.config/gh/hosts.yml`,
+which lives on the `dsh-home` volume — one login survives container
+recreations. Afterwards `gh auth setup-git` (once) makes plain `git` push/pull
+use the stored token.
+
+Note: dsh deliberately scrubs every env var matching `KEY|PASSWORD|SECRET|TOKEN`
+from agent subprocesses, so `GH_TOKEN` set on the container is **not** visible
+inside agent shells — the stored `gh` login above is the supported path, the
+env var is only the bootstrap source for `docker compose exec` shells.
+
+For commits, git needs an identity. Either set it once (persists on the
+`dsh-home` volume):
+
+```sh
+docker compose exec dsh git config --global user.name "Your Name"
+docker compose exec dsh git config --global user.email "you@example.com"
+```
+
+or pass it per-run via env (git reads these variables automatically):
 
 ```
 GIT_AUTHOR_NAME=Your Name
@@ -144,9 +173,6 @@ GIT_AUTHOR_EMAIL=you@example.com
 GIT_COMMITTER_NAME=Your Name
 GIT_COMMITTER_EMAIL=you@example.com
 ```
-
-Note: `gh auth login` writes to `~/.config/gh` in the container layer and is lost
-when the container is recreated. A token via `.env` (`GH_TOKEN`) is the durable option.
 
 ## Dev environment in the container
 
