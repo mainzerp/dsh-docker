@@ -12,17 +12,41 @@ services:
     ports:
       - "3080:3080"
     environment:
-      TRUSTED_HOSTS: ${TRUSTED_HOSTS:-}
+      # Runtime variables, passed through from the shell or .env when set.
+      # List syntax: a variable set in neither place is omitted entirely —
+      # never injected as an empty string that would shadow file-based
+      # credentials or git identities.
+      # --- DeepSeek Harness ---
+      - DEEPSEEK_API_KEY
+      - DEEPSEEK_BASE_URL
+      - DSH_MODEL
+      - DSH_SYSTEM_PROMPT
+      # --- Additional model providers (referenced via apiKeyEnv) ---
+      - ANTHROPIC_API_KEY
+      - OPENAI_API_KEY
+      # --- WebUI / LAN access ---
+      - TRUSTED_HOSTS
+      - DSH_ALLOW_REMOTE_CONFIGURATION
+      # --- GitHub / Git ---
+      - GH_TOKEN
+      - GITHUB_TOKEN
+      - GIT_AUTHOR_NAME
+      - GIT_AUTHOR_EMAIL
+      - GIT_COMMITTER_NAME
+      - GIT_COMMITTER_EMAIL
     env_file:
       - path: .env
         required: false
     volumes:
       - dsh-data:/data
-      - dsh-workspace:/workspace
+      # The WebUI creates workspaces under the agent's home directory, so the
+      # home directory itself is the volume: workspaces, gh auth, .gitconfig
+      # and caches all survive container recreation.
+      - dsh-home:/home/node
     restart: unless-stopped
     init: true
     shm_size: 1gb
 
 volumes:
   dsh-data:
-  dsh-workspace:
+  dsh-home:
