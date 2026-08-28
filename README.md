@@ -2,6 +2,8 @@
 
 Docker deployment for [DeepSeek Harness (`dsh`)](https://github.com/deepseek-ai/deepseek-harness) with access through the WebUI.
 
+> **Note:** This project is "vibe coded" — the code was written iteratively with AI assistance.
+
 ## Quickstart
 
 ```sh
