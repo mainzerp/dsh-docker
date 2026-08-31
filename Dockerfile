@@ -110,8 +110,12 @@ RUN corepack enable && corepack prepare pnpm@latest --activate
 
 # --- dsh install from the packed tarballs ---
 # file:-consumer install, modeled on upstream's verify-packed-install.ts: every
-# tarball is a direct file: dependency, so the landlock platform package
-# installs despite --omit=optional (which still guards unrelated optional deps).
+# tarball is a direct file: dependency. Unlike upstream's verifier we do NOT
+# pass --omit=optional: koffi's prebuilt binaries ship as platform-restricted
+# optional deps (@koromix/koffi-linux-x64), and omitting them forces a CMake
+# source rebuild that fails on this base image. npm installs only the matching
+# platform package and tolerates unreachable optional deps (e.g. the
+# never-published landlock arm64 package), so this is safe.
 COPY --from=dsh-build /src/dist/npm /opt/dsh/packed/npm
 COPY --from=dsh-build /src/dist/npm-vendor /opt/dsh/packed/npm-vendor
 COPY --from=dsh-build /src/dist/npm-landlock /opt/dsh/packed/npm-landlock
@@ -120,7 +124,7 @@ COPY patches/enable-remote-configuration.mjs /usr/local/lib/dsh-patches/
 RUN node /usr/local/lib/dsh-build/make-consumer-manifest.mjs /opt/dsh/package.json \
         /opt/dsh/packed/npm /opt/dsh/packed/npm-vendor /opt/dsh/packed/npm-landlock \
     && cd /opt/dsh \
-    && npm install --no-audit --no-fund --package-lock=false --omit=optional
+    && npm install --no-audit --no-fund --package-lock=false
 
 # Build-time verifications — fail the image build on regression:
 # 1. the installed CLI runs and reports its version (tracks DSH_VERSION),
