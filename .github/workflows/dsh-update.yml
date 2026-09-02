@@ -1,9 +1,11 @@
 name: dsh-update
 
-# Checks the npm registry for a new @deepseek-ai/dsh release and rebuilds the
-# image only when that version has not been published yet (checked via the
-# dsh-<version> tag on GHCR). Publishes `latest` + `dsh-<version>` tags.
-# Release builds with semver tags stay in docker.yml.
+# Checks the upstream git tags (deepseek-ai/deepseek-harness, prefix dsh-v) for a new dsh release and rebuilds the image
+# only when that version has not been published yet (checked via the dsh-<version> tag on GHCR). Only release
+# candidates and stable releases are tracked (dsh-vX.Y.Z-rc.N / dsh-vX.Y.Z) — alpha/beta prereleases are excluded on
+# purpose; build those manually via the DSH_VERSION build arg if needed. Publishes `latest` + `dsh-<version>` tags.
+# Release builds with semver tags stay in docker.yml. (dsh is no longer published to npm — git tags are the only
+# versioned upstream artifacts.)
 #
 # Caveat: GitHub disables scheduled workflows after 60 days of repository
 # inactivity — re-enable via the Actions tab if that happens.
@@ -26,6 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.dsh.outputs.version }}
+      tag: ${{ steps.dsh.outputs.tag }}
       build: ${{ steps.dsh.outputs.build }}
     steps:
       - uses: docker/login-action@v3
@@ -34,14 +37,22 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Compare npm latest against published image tags
+      - name: Compare latest upstream git tag against published image tags
         id: dsh
         run: |
-          version=$(curl -fsSL https://registry.npmjs.org/@deepseek-ai/dsh | jq -r '."dist-tags".latest')
-          if [ -z "$version" ] || [ "$version" = "null" ]; then
-            echo "Failed to resolve dsh version from npm registry" >&2
+          # Newest RC or stable dsh-v* tag by semver ordering; alpha/beta
+          # prereleases are filtered out (version:refname sorts -rc.N before the
+          # matching stable tag, so tail -1 picks stable when both exist).
+          tag=$(git ls-remote --tags --sort='version:refname' \
+                https://github.com/deepseek-ai/deepseek-harness.git 'refs/tags/dsh-v*' \
+                | grep -v '\^{}' | sed 's#.*refs/tags/##' \
+                | grep -E '^dsh-v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$' | tail -1)
+          if [ -z "$tag" ]; then
+            echo "no RC or stable dsh-v* tag found" >&2
             exit 1
           fi
+          version=${tag#dsh-v}
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           image="ghcr.io/${{ github.repository }}:dsh-${version}"
           if docker manifest inspect "$image" > /dev/null 2>&1; then
@@ -80,7 +91,7 @@ jobs:
           context: .
           push: true
           build-args: |
-            DSH_VERSION=${{ needs.check.outputs.version }}
+            DSH_VERSION=${{ needs.check.outputs.tag }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha

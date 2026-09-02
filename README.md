@@ -11,7 +11,13 @@ cp .env.example .env   # set DEEPSEEK_API_KEY and, if needed, TRUSTED_HOSTS
 docker compose up -d --build
 ```
 
-WebUI: `http://localhost:3080` or `http://<lan-host>:3080`.
+Since 0.1.2 the WebUI requires a per-launch token — a bare
+`http://localhost:3080` returns 401. Get the authenticated URL from the
+container logs and open one of the `dsh web (external):` lines:
+
+```sh
+docker compose logs dsh | grep 'dsh web'
+```
 
 All runtime variables (see `.env.example`) are passed through from the shell
 environment as well as from `.env` (`GH_TOKEN=... docker compose up -d`);
@@ -33,8 +39,11 @@ built on every release). Version pinning works via the image tag — the `DSH_VE
 build in `compose.yaml`.
 
 A scheduled workflow (`.github/workflows/dsh-update.yml`, daily) rebuilds the image
-automatically when a new `@deepseek-ai/dsh` version appears on npm, publishing
-`latest` + `dsh-<version>` tags (e.g. `dsh-0.1.0-rc.7`). Pin to a specific dsh
+automatically when a new upstream release-candidate or stable git tag (`dsh-v*` — alpha/beta
+prereleases are excluded on purpose; build those locally via `DSH_VERSION`) appears on
+[deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)
+(dsh is no longer published to npm), publishing
+`latest` + `dsh-<version>` tags (e.g. `dsh-0.1.2-rc.1`). Pin to a specific dsh
 version via `image: ghcr.io/mainzerp/dsh-docker:dsh-<version>` in
 `compose.prebuilt.yaml`; `latest` always tracks the newest dsh release.
 
@@ -52,13 +61,18 @@ Set `TRUSTED_HOSTS` in `.env` (comma-separated, with port):
 TRUSTED_HOSTS=192.168.1.10:3080,myserver:3080
 ```
 
-Then run `docker compose up -d` again.
+Then run `docker compose up -d` again. The launch token survives authority
+rewriting (the minted cookie binds to the authority the browser used), so use
+the `dsh web (external):` URL the entrypoint prints for each `TRUSTED_HOSTS`
+entry (`docker compose logs dsh | grep 'dsh web'`).
 
 ## Exposure beyond your own network
 
-The WebUI has no built-in authentication — anyone who can reach port 3080 gets a
-fully agent-capable session. Do **not** expose it directly to the internet or an
-untrusted network.
+The WebUI is protected by a per-launch token (a single shared per-process
+credential, printed to the container logs) — not per-user authentication.
+Anyone with the token who can reach port 3080 gets a fully agent-capable
+session. Do **not** expose it directly to the internet or an untrusted
+network.
 
 If you need access from outside your own network, put a reverse proxy with
 authentication in front of it (HTTPS-terminating, e.g. Traefik, Caddy, or nginx
@@ -72,27 +86,22 @@ oauth2-proxy), and:
 
 ### Remote configuration
 
-dsh pins the settings/credentials/agent-preset management surface to loopback
-by design (until upstream ships a real auth layer). Browsers opening the WebUI
-via a non-localhost authority — LAN IP or proxy hostname — therefore see
-"settings are unavailable in this browser", and `TRUSTED_HOSTS` does not change
-that.
+Before 0.1.2, dsh pinned the settings/credentials/agent-preset management
+surface to loopback, so browsers on a LAN IP or proxy hostname saw "settings
+are unavailable in this browser". The harness rewrite replaced that
+server-side fence with the uniform Host/Origin trust fence plus browser
+launch-token auth; the remaining client-side loopback pin is a UI courtesy
+that this image patches at build time
+(`patches/enable-remote-configuration.mjs`, adapted from
+StefanKhor/deepseek-harness-docker, MIT). Settings therefore works from every
+authority in `TRUSTED_HOSTS` — the old `DSH_ALLOW_REMOTE_CONFIGURATION` flag
+is removed (it only gated the deleted server half and would be a no-op).
 
-Two ways to manage settings remotely:
-
-- **SSH tunnel (no trade-offs):** `ssh -L 3080:localhost:3080 user@host`, then
-  open `http://localhost:3080` — loopback authorities get the full UI.
-- **Opt-in patch:** the image ships `patches/enable-remote-configuration.mjs`
-  (adapted from StefanKhor/deepseek-harness-docker, MIT), which lets the
-  configuration methods accept `TRUSTED_HOSTS`. Enable with
-  `DSH_ALLOW_REMOTE_CONFIGURATION=1` in `.env` and recreate the container.
-  **Only behind an authenticating reverse proxy** — anyone who can reach the
-  WebUI can then read and change settings and credentials.
-
-Note: the browser-side half of the patch is applied at image build time. With
-the env flag unset (default), remote browsers get `HTTP 403` transport failures
-on the settings surfaces instead of the "unavailable" message — same behavior,
-noisier wording.
+Effective access control is `TRUSTED_HOSTS` + the per-launch token + any
+reverse proxy in front: anyone who can reach the WebUI (and holds the token)
+can read and change settings and credentials. Keep the authenticating
+reverse proxy from the previous section in place when exposing the UI beyond
+your own network.
 
 ## Persistence
 
@@ -124,8 +133,12 @@ System packages belong in the `Dockerfile`; that is the only durable way.
   `/data/.env` / `/data/.credentials.yaml`
 - `TRUSTED_HOSTS` — see above
 - `DSH_PORT` — external port inside the container (default 3080)
-- `DSH_VERSION` — pin the npm version: set `DSH_VERSION=0.1.0-rc.7` in `.env`
-  (passed through as a build arg), then `docker compose up -d --build`
+- `DSH_VERSION` — upstream git tag to build dsh from, e.g. `dsh-v0.1.2-alpha.4`
+  in `.env` (passed through as a build arg), then `docker compose up -d --build`.
+  dsh is built from source: expect ~15-30 min and >=6 GB RAM for the builder
+  stage
+- `DSH_TELEMETRY_DISABLED` — image default `1` (telemetry off); set to an empty
+  value to enable upstream telemetry
 - `GH_VERSION` — GitHub CLI version in the image (default in `Dockerfile`)
 - `PLAYWRIGHT_VERSION` — Playwright version for browser tooling (default in `Dockerfile`)
 - `UV_VERSION` — uv version in the image (default in `Dockerfile`)
@@ -181,8 +194,9 @@ GIT_COMMITTER_EMAIL=you@example.com
 The base image is `node:24-bookworm` (full buildpack-deps toolchain: gcc/g++/make,
 git, curl, and the common build libraries are already included).
 
-Preinstalled CLIs: `gh`, `jq`, `rg`, `ffmpeg`, `socat`, `tree`, `tmux`, `htop`,
-`rsync`, `sqlite3`, plus `python3` (3.11), `python3-venv`, `pip`, and `uv`.
+Preinstalled CLIs: `gh`, `jq`, `rg`, `ffmpeg`, `socat`, `bwrap` (bubblewrap),
+`tree`, `tmux`, `htop`, `rsync`, `sqlite3`, plus `python3` (3.11),
+`python3-venv`, `pip`, and `uv`.
 
 - Python: system Python is PEP 668 "externally managed" — always use
   `python3 -m venv .venv` or `uv venv` for package installs. Other Python
@@ -211,15 +225,18 @@ reference them via `apiKeyEnv` (see `.env.example`).
 
 ### Sandboxing
 
-dsh confines agent subprocesses with Landlock (`landlock-run`, prebuilt binaries
-ship with dsh via npm — no image support needed). Enforcement is fail-closed and
-depends on the host: kernel 5.13+ with Landlock enabled and a Docker version
-whose default seccomp profile permits the `landlock_*` syscalls (current Docker
-does; not pinned to a specific minimum version). On WSL2/Docker Desktop the WSL2
-kernel determines availability — check the runtime status
-(`docker compose logs dsh | grep -i -E 'landlock|sandbox'`) rather than
-assuming. If unsupported, dsh reports the sandbox as `unusable` instead of
-silently running unconfined.
+dsh confines agent subprocesses with bubblewrap (preferred; apt-installed in
+the image) and falls back to `landlock-run` (built from source in the image as
+a static musl binary). Enforcement is fail-closed and depends on the host:
+landlock needs kernel 5.13+ with Landlock enabled and a Docker seccomp profile
+that permits the `landlock_*` syscalls (current Docker does); bubblewrap needs
+user-namespace support, which some Docker setups restrict. On WSL2/Docker
+Desktop the WSL2 kernel determines availability — check the runtime status
+(`docker compose logs dsh | grep -i -E 'landlock|sandbox|bwrap'`, or ask the
+agent to run a sandboxed bash call) rather than assuming. If neither runner
+works, dsh reports `SANDBOX_UNAVAILABLE` instead of silently running
+unconfined. `DSH_PERMISSION_MODE=danger-full-access` exists as an escape hatch
+but is deliberately NOT the image default.
 
 ## Note
 

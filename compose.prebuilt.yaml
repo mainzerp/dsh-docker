@@ -1,6 +1,8 @@
 # Uses the prebuilt image from GHCR instead of building locally.
 # Start: docker compose -f compose.prebuilt.yaml up -d
-# Version pinning happens via the image tag (e.g. ghcr.io/mainzerp/dsh-docker:0.1),
+# Version pinning happens via the image tag (e.g. ghcr.io/mainzerp/dsh-docker:0.1
+# or the dsh-build tags ghcr.io/mainzerp/dsh-docker:dsh-0.1.2-rc.1 — only RC and
+# stable dsh releases are published to GHCR),
 # not via DSH_VERSION build args — those only apply to the local build in compose.yaml.
 services:
   dsh:
@@ -23,7 +25,7 @@ services:
       - OPENAI_API_KEY
       # --- WebUI / LAN access ---
       - TRUSTED_HOSTS
-      - DSH_ALLOW_REMOTE_CONFIGURATION
+      - DSH_TELEMETRY_DISABLED
       # --- GitHub / Git ---
       - GH_TOKEN
       - GITHUB_TOKEN

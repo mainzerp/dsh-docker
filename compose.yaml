@@ -3,7 +3,7 @@ services:
     build:
       context: .
       args:
-        DSH_VERSION: ${DSH_VERSION:-latest}
+        DSH_VERSION: ${DSH_VERSION:-dsh-v0.1.2-alpha.4}
         GH_VERSION: ${GH_VERSION:-2.97.0}
         PLAYWRIGHT_VERSION: ${PLAYWRIGHT_VERSION:-1.62.1}
         UV_VERSION: ${UV_VERSION:-0.12.5}
@@ -26,7 +26,7 @@ services:
       - OPENAI_API_KEY
       # --- WebUI / LAN access ---
       - TRUSTED_HOSTS
-      - DSH_ALLOW_REMOTE_CONFIGURATION
+      - DSH_TELEMETRY_DISABLED
       # --- GitHub / Git ---
       - GH_TOKEN
       - GITHUB_TOKEN
