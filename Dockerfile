@@ -14,7 +14,7 @@
 # ---------------------------------------------------------------------------
 FROM node:24-bookworm AS dsh-build
 
-ARG DSH_VERSION=dsh-v0.1.2-alpha.3
+ARG DSH_VERSION=dsh-v0.1.2-alpha.4
 
 # musl-tools: static musl build of landlock-run (sandbox runner, D6).
 RUN apt-get update \

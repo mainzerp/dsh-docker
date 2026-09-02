@@ -40,7 +40,7 @@ A scheduled workflow (`.github/workflows/dsh-update.yml`, daily) rebuilds the im
 automatically when a new upstream git tag (`dsh-v*`) appears on
 [deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)
 (dsh is no longer published to npm), publishing
-`latest` + `dsh-<version>` tags (e.g. `dsh-0.1.2-alpha.3`). Pin to a specific dsh
+`latest` + `dsh-<version>` tags (e.g. `dsh-0.1.2-alpha.4`). Pin to a specific dsh
 version via `image: ghcr.io/mainzerp/dsh-docker:dsh-<version>` in
 `compose.prebuilt.yaml`; `latest` always tracks the newest dsh release.
 
@@ -130,7 +130,7 @@ System packages belong in the `Dockerfile`; that is the only durable way.
   `/data/.env` / `/data/.credentials.yaml`
 - `TRUSTED_HOSTS` — see above
 - `DSH_PORT` — external port inside the container (default 3080)
-- `DSH_VERSION` — upstream git tag to build dsh from, e.g. `dsh-v0.1.2-alpha.3`
+- `DSH_VERSION` — upstream git tag to build dsh from, e.g. `dsh-v0.1.2-alpha.4`
   in `.env` (passed through as a build arg), then `docker compose up -d --build`.
   dsh is built from source: expect ~15-30 min and >=6 GB RAM for the builder
   stage
