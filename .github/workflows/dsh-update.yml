@@ -1,10 +1,10 @@
 name: dsh-update
 
-# Checks the upstream git tags (deepseek-ai/deepseek-harness, prefix dsh-v)
-# for a new dsh release and rebuilds the image only when that version has not
-# been published yet (checked via the dsh-<version> tag on GHCR). Publishes
-# `latest` + `dsh-<version>` tags. Release builds with semver tags stay in
-# docker.yml. (dsh is no longer published to npm — git tags are the only
+# Checks the upstream git tags (deepseek-ai/deepseek-harness, prefix dsh-v) for a new dsh release and rebuilds the image
+# only when that version has not been published yet (checked via the dsh-<version> tag on GHCR). Only release
+# candidates and stable releases are tracked (dsh-vX.Y.Z-rc.N / dsh-vX.Y.Z) — alpha/beta prereleases are excluded on
+# purpose; build those manually via the DSH_VERSION build arg if needed. Publishes `latest` + `dsh-<version>` tags.
+# Release builds with semver tags stay in docker.yml. (dsh is no longer published to npm — git tags are the only
 # versioned upstream artifacts.)
 #
 # Caveat: GitHub disables scheduled workflows after 60 days of repository
@@ -40,13 +40,15 @@ jobs:
       - name: Compare latest upstream git tag against published image tags
         id: dsh
         run: |
-          # Newest dsh-v* tag by semver ordering (prereleases sort correctly
-          # with version:refname); skip the peeled ^{} lines.
+          # Newest RC or stable dsh-v* tag by semver ordering; alpha/beta
+          # prereleases are filtered out (version:refname sorts -rc.N before the
+          # matching stable tag, so tail -1 picks stable when both exist).
           tag=$(git ls-remote --tags --sort='version:refname' \
                 https://github.com/deepseek-ai/deepseek-harness.git 'refs/tags/dsh-v*' \
-                | grep -v '\^{}' | tail -1 | sed 's#.*refs/tags/##')
+                | grep -v '\^{}' | sed 's#.*refs/tags/##' \
+                | grep -E '^dsh-v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$' | tail -1)
           if [ -z "$tag" ]; then
-            echo "no dsh-v* tag found" >&2
+            echo "no RC or stable dsh-v* tag found" >&2
             exit 1
           fi
           version=${tag#dsh-v}

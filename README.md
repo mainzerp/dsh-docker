@@ -37,10 +37,11 @@ built on every release). Version pinning works via the image tag — the `DSH_VE
 build in `compose.yaml`.
 
 A scheduled workflow (`.github/workflows/dsh-update.yml`, daily) rebuilds the image
-automatically when a new upstream git tag (`dsh-v*`) appears on
+automatically when a new upstream release-candidate or stable git tag (`dsh-v*` — alpha/beta
+prereleases are excluded on purpose; build those locally via `DSH_VERSION`) appears on
 [deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)
 (dsh is no longer published to npm), publishing
-`latest` + `dsh-<version>` tags (e.g. `dsh-0.1.2-alpha.4`). Pin to a specific dsh
+`latest` + `dsh-<version>` tags (e.g. `dsh-0.1.2-rc.1`). Pin to a specific dsh
 version via `image: ghcr.io/mainzerp/dsh-docker:dsh-<version>` in
 `compose.prebuilt.yaml`; `latest` always tracks the newest dsh release.
 
