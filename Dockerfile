@@ -40,10 +40,13 @@ RUN curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_$
 RUN corepack enable && corepack prepare pnpm@latest --activate
 
 # DSH_VERSION is an npm version/dist-tag of @deepseek-ai/dsh (NOT a git tag).
-# Default install (no --omit=optional): the landlock-run launcher ships as
-# platform-restricted optional deps of @deepseek-ai/dsh-sandbox-local
-# (@deepseek-ai/node-addon-landlock-run-linux-x64/-arm64), so the sandbox
-# fallback binary comes in with the regular install.
+# Default install (no --omit=optional): the landlock-run launcher ships as a
+# platform-restricted optional dep of @deepseek-ai/node-addon-landlock-run (a
+# plain dependency of @deepseek-ai/dsh-sandbox-local), so the sandbox fallback
+# binary comes in with the regular install.
+# npm 11 blocks dependency install scripts by default; that is harmless on
+# linux/x64 (node-pty ships its prebuild in the tarball, koffi uses its
+# @koromix/koffi-linux-x64 optional prebuild, ensure-spawn-helper is a no-op).
 ARG DSH_VERSION=0.1.2-rc.1
 RUN npm install -g "@deepseek-ai/dsh@${DSH_VERSION}"
 
