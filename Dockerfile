@@ -70,6 +70,19 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 RUN node /usr/local/lib/dsh-patches/enable-remote-configuration.mjs "$(dirname "$(npm root -g)")" | tee /tmp/patch.log \
     && ! grep -q 'WARN: browser isLoopback pattern not found' /tmp/patch.log
 
+# Stream stall watchdog patch (both halves, applied unconditionally at build
+# time). 0.1.2 already heartbeats the Remote-stream WebSocket on the host, but
+# the browser cannot observe ping/pong and reconnects only on socket close, so a
+# silently dead downlink still freezes the WebUI until a page reload. The host
+# half sends a tiny application keepalive frame next to its ping; the browser
+# half drops it and runs a socket-bound stall watchdog that triggers the
+# existing reconnect path. See README "WebUI downlink watchdog".
+# Fail-closed: any `WARN:` in the log (missing file, drifted needle, write
+# failure) fails the build, because either half alone is worse than neither.
+COPY patches/stream-stall-watchdog.mjs /usr/local/lib/dsh-patches/stream-stall-watchdog.mjs
+RUN node /usr/local/lib/dsh-patches/stream-stall-watchdog.mjs "$(dirname "$(npm root -g)")" | tee /tmp/stall-watchdog.log \
+    && ! grep -q 'WARN:' /tmp/stall-watchdog.log
+
 # Telemetry off by default (upstream flipped the default to FEEDBACK_ONLY).
 # Override at runtime with an empty value: DSH_TELEMETRY_DISABLED=
 ENV DSH_TELEMETRY_DISABLED=1

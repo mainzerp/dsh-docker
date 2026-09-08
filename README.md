@@ -101,6 +101,62 @@ can read and change settings and credentials. Keep the authenticating
 reverse proxy from the previous section in place when exposing the UI beyond
 your own network.
 
+### WebUI downlink watchdog
+
+0.1.2 heartbeats the host side of the Remote-stream WebSocket
+(`@deepseek-ai/dsh-api-gateway` pings every socket and terminates it after two
+missed pongs; interval configurable via the api-gateway plugin's
+`websocketHeartbeatIntervalMs`, default 2000 ms). The browser, however, cannot
+observe WebSocket ping/pong and its `RemoteStreamMuxClient` reconnects only on
+the socket `close`/`error` event. A downlink that dies silently — reverse-proxy
+idle drop, NAT timeout, WireGuard re-key, a stalled tunnel — therefore left the
+WebUI frozen while it still displayed "connected", and only a page reload
+recovered it.
+
+`patches/stream-stall-watchdog.mjs` closes that gap and is applied at build
+time (both halves are required, the build fails on any `WARN:` in the log):
+
+- host half: next to each heartbeat ping, the server sends the tiny application
+  frame `{"type":"keepalive"}`;
+- browser half: that frame is dropped and re-arms a socket-bound stall watchdog.
+  When no frame arrives for `globalThis.__DSH_STREAM_STALL_MS` (default
+  30000 ms), the existing `RemoteStreamMuxClient.reconnect()` path runs — the
+  logical streams fail, the domain layer reopens them and resyncs, exactly like
+  a socket close. No page reload is needed.
+
+Keep the stall threshold comfortably above `websocketHeartbeatIntervalMs`
+(15x at the defaults). If you raise the heartbeat interval in the plugin
+config, raise `__DSH_STREAM_STALL_MS` in the same ratio. The needle-based patch
+is verified against dsh 0.1.2-rc.1; a DSH version bump that changes these
+bundles fails the image build on purpose, so the patch is re-checked before it
+silently stops matching.
+
+After an update, reload an already open tab once: a cached old bundle treats
+the keepalive frame as an invalid carrier frame and reconnects once.
+
+### Upgrading to 0.1.2 with profile plugins
+
+0.1.2 tightened how the client module system identifies a plugin package, and
+it removed `@deepseek-ai/dsh-client-runtime`. Two consequences for plugins
+installed in the profile volume (e.g. `dsh-workspace`):
+
+- The profile dependency alias, the plugin's `package.json` `name`, and the
+  module id its client bundle registers in `__ModuleLoader__.load({ id })` must
+  agree. `dsh-workspace` up to 1.1.0 declares `name: "@mainzerp/dsh-workspace"`
+  while the profile installs it as `dsh-workspace`: 0.1.2 then silently skips
+  the client half (the host half stays `active` in the plugin inventory) and the
+  project panel disappears. Setting `"name": "dsh-workspace"` in the plugin's
+  `package.json` fixes it (verified against 0.1.2-rc.1).
+- A plugin that still injects `@deepseek-ai/dsh-client-runtime` (0.4.2 and
+  older) cannot load at all on 0.1.2. Refresh the profile after the upgrade:
+
+  ```
+  docker compose exec dsh sh -c 'CI=true dsh plugin --profile web install'
+  ```
+
+  `CI=true` avoids pnpm's "Aborted removal of modules directory due to no TTY".
+  `dsh-workspace` main is at 1.1.0 and targets 0.1.2.
+
 ## Persistence
 
 | Path | Contents |
