@@ -1,27 +1,34 @@
 /**
  * Docker compatibility patch for DeepSeek Harness (fail-closed).
  *
- * dsh pins the privileged configuration surface (settings.*, credentials.*,
- * llm.discoverModels, agentPreset.read/copy/remove) to loopback by design, and
- * the browser bundle derives connection.isLoopback from window.location.hostname.
- * Any non-localhost authority (LAN IP, reverse proxy hostname) therefore shows
- * "settings are unavailable in this browser".
+ * The browser bundle derives connection.isLoopback from
+ * window.location.hostname and only mirrors the settings surface in loopback
+ * ("host") mode. Any non-localhost authority (LAN IP, reverse proxy hostname)
+ * therefore shows "settings are unavailable in this browser".
+ *
+ * Since the harness rewrite (0.1.2), the server-side PRIVILEGED_METHODS
+ * loopback fence no longer exists upstream — it was replaced by the uniform
+ * Host/Origin trust fence plus browser launch-token auth on every /api
+ * request. Only this browser half of the patch remains, and with it the
+ * DSH_ALLOW_REMOTE_CONFIGURATION flag (which only gated the deleted server
+ * half and would now be a no-op).
+ *
+ * Security note: upstream's loopback pin is now a client-side UI courtesy,
+ * not an authorization boundary. Effective access control is TRUSTED_HOSTS +
+ * the per-launch token + any reverse proxy in front. Only expose the WebUI
+ * behind an authenticating reverse proxy (or an otherwise trusted network):
+ * anyone who can reach the UI can change settings and credentials.
+ *
+ * What the patch does: in every client.js bundle, force
+ * connection.isLoopback = true so the settings mirror uses host mode.
  *
  * Deliberately NOT lifted: agentPreset.openDocument, settings.openDocument,
  * host.pickDirectory, host.openPath — they drive the host desktop, which does
  * not exist in a container.
  *
- * 1) Server (dsh-client-connection/lib/index.js): DSH_ALLOW_REMOTE_CONFIGURATION=1
- *    lets the configuration methods accept the configured trustedHosts.
- * 2) Browser (every client.js bundle): force connection.isLoopback = true so the
- *    settings mirror uses host mode.
- *
- * Only safe when the WebUI sits behind an authenticating reverse proxy (or is
- * otherwise access-controlled): with the env flag set, anyone who can reach the
- * UI can change settings and credentials.
- *
  * NOTE: Resilient to upstream pattern changes — warns and skips when a pattern
- *       does not match, leaving stock dsh behavior in place.
+ *       does not match, leaving stock dsh behavior in place. The image build
+ *       greps this output and fails when zero bundles were patched.
  *
  * Adapted from StefanKhor/deepseek-harness-docker (MIT), itself inspired by
  * AlliotTech/deepseek-harness-docker.
@@ -45,87 +52,13 @@ function walkJs(dir, out = []) {
   return out
 }
 
-// --- server privileged fence ---
-console.log('Searching for dsh-client-connection/lib/index.js...')
-const serverCandidates = walkJs(nm).filter(p =>
-  p.replace(/\\/g, '/').endsWith('deepseek-ai/dsh-client-connection/lib/index.js')
-)
-if (serverCandidates.length === 0) {
-  console.log('WARN: dsh-client-connection/lib/index.js not found, skipping server patch')
-} else {
-  for (const serverPath of serverCandidates) {
-    try {
-      let server = readFileSync(serverPath, 'utf8')
-      let patched = false
-
-      // Try to find and patch PRIVILEGED_METHODS
-      const privilegedMethodsMatch = server.match(/const PRIVILEGED_METHODS = new Set\(\[[\s\S]*?\]\);/)
-      if (privilegedMethodsMatch) {
-        const original = privilegedMethodsMatch[0]
-        const patchedMethods = original.replace(
-          ']);',
-          `]);
-const REMOTE_CONFIGURATION_METHODS = new Set([
-\t"settings.describe",
-\t"settings.update",
-\t"settings.replace",
-\t"settings.mutate",
-\t"credentials.describe",
-\t"credentials.set",
-\t"credentials.unset",
-\t"llm.discoverModels",
-\t"agentPreset.read",
-\t"agentPreset.copy",
-\t"agentPreset.remove"
-]);`
-        )
-        server = server.replace(original, patchedMethods)
-        patched = true
-      }
-
-      // Try to find and patch trustedHosts
-      const trustedHostsMatch = server.match(/\tconst trustedHosts = config\?\.trustedHosts \?\? \[\];\n\tconst maxRequestBodyBytes/)
-      if (trustedHostsMatch) {
-        const original = trustedHostsMatch[0]
-        const patched = original.replace(
-          `\tconst trustedHosts = config?.trustedHosts ?? [];
-\tconst maxRequestBodyBytes`,
-          `\tconst trustedHosts = config?.trustedHosts ?? [];
-\tconst remoteConfigurationHosts = process.env.DSH_ALLOW_REMOTE_CONFIGURATION === "1" ? trustedHosts : [];
-\tconst maxRequestBodyBytes`
-        )
-        server = server.replace(original, patched)
-      }
-
-      // Try to find and patch isTrustedApiRequest
-      const trustedApiMatch = server.match(/if \(method !== void 0 && PRIVILEGED_METHODS\.has\(method\) && !isTrustedApiRequest\(request, \[\]\)\) return new Response\("forbidden", \{ status: 403 \}\);/)
-      if (trustedApiMatch) {
-        const original = trustedApiMatch[0]
-        const patched = original.replace(
-          `if (method !== void 0 && PRIVILEGED_METHODS.has(method) && !isTrustedApiRequest(request, [])) return new Response("forbidden", { status: 403 });`,
-          `if (method !== void 0 && PRIVILEGED_METHODS.has(method)) {
-\t\t\tconst acceptedHosts = REMOTE_CONFIGURATION_METHODS.has(method) ? remoteConfigurationHosts : [];
-\t\t\tif (!isTrustedApiRequest(request, acceptedHosts)) return new Response("forbidden", { status: 403 });
-\t\t}`
-        )
-        server = server.replace(original, patched)
-      }
-
-      if (patched) {
-        writeFileSync(serverPath, server)
-        console.log(`Patched server ${serverPath}`)
-      } else {
-        console.log(`WARN: No matching patterns in ${serverPath}, skipping`)
-      }
-    } catch (err) {
-      console.log(`WARN: Failed to patch ${serverPath}: ${err.message}`)
-    }
-  }
-}
-
 // --- browser isLoopback (every client.js copy) ---
+// Needle matches the built expression in dsh-client-connection/lib/client.js
+// (source: packages/client/connection/src/client/index.ts, harness 0.1.2;
+// the source's `undefined` is emitted as `void 0` by the bundler). If this
+// drifts upstream, zero bundles match and the image build fails the grep-gate.
 console.log('Searching for client isLoopback patterns...')
-const needle = 'isLoopback: pageLocation === void 0 || isLoopbackHostname(pageLocation.hostname),'
+const needle = 'isLoopback: transport?.ownsHost === true || pageLocation === void 0 || isLoopbackHostname(pageLocation.hostname),'
 const replacement = 'isLoopback: true,'
 let clientHits = 0
 for (const file of walkJs(nm)) {
