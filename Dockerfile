@@ -60,13 +60,14 @@ RUN version=$(node "$(npm root -g)/@deepseek-ai/dsh/lib/bin.js" --version) \
 # replaced by the Host/Origin trust fence plus launch-token auth — so only the
 # client-side isLoopback pin remains, and the patch lifts it. See README
 # "Remote configuration" for the security model.
-# npm hoists the dsh package family to the global root, so the script runs
-# against $(npm root -g) (it walks <root>/node_modules), NOT the dsh package
-# directory. Fail-closed: the build fails when the script errors or when the
-# browser needle drifted upstream (WARN in the log = zero bundles patched).
+# npm hoists the dsh package family to the global root; the script walks
+# <root>/node_modules, and for a global install `npm root -g` IS that
+# node_modules directory — so it must be handed its parent (/usr/local/lib).
+# Fail-closed: the build fails when the script errors or when the browser
+# needle drifted upstream (WARN in the log = zero bundles patched).
 COPY patches/enable-remote-configuration.mjs /usr/local/lib/dsh-patches/enable-remote-configuration.mjs
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
-RUN node /usr/local/lib/dsh-patches/enable-remote-configuration.mjs "$(npm root -g)" | tee /tmp/patch.log \
+RUN node /usr/local/lib/dsh-patches/enable-remote-configuration.mjs "$(dirname "$(npm root -g)")" | tee /tmp/patch.log \
     && ! grep -q 'WARN: browser isLoopback pattern not found' /tmp/patch.log
 
 # Telemetry off by default (upstream flipped the default to FEEDBACK_ONLY).
