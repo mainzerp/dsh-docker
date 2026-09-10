@@ -134,6 +134,84 @@ silently stops matching.
 After an update, reload an already open tab once: a cached old bundle treats
 the keepalive frame as an invalid carrier frame and reconnects once.
 
+### Reconnecting indicator during normal operation
+
+The WebUI shows a warning indicator next to the settings entry ("reconnecting...",
+then "recovered") whenever the client connection generation is aborted and rebuilt.
+On a phone that happened during ordinary use, without anything actually being
+lost, because the client reacts to the browser's own network events:
+
+`@deepseek-ai/dsh-client-connection` mirrors `navigator.onLine` through the
+`online`/`offline` window events and aborts the running generation on every
+transition. `navigator.onLine` is not a reliable liveness signal on mobile: it
+reports `offline` for routine transitions (Wi-Fi/cellular handover, radio state
+changes while the screen is off, brief tunnel hiccups) while the already-open
+socket keeps working.
+
+Reproduced on 2026-09-10 by driving a browser through CDP: switching the page
+offline and online again produced exactly one forced reconnect — console
+`[connection] connection lost, retry #1`, a new `/api/remote.mux` socket, and the
+indicator — although no packet had been lost. The server side is healthy in the
+same window: heartbeats arrive every 2000 ms with no gap above ~2 s over minutes,
+and a main thread blocked for 6 s does not kill the socket (Chrome answers
+WebSocket pings outside the renderer).
+
+`patches/network-availability-churn.mjs` narrows that abort in
+`dsh-client-connection/lib/client.js`: the controller tracks whether the running
+attempt has already delivered a connection, and `setNetworkAvailable` aborts only
+an attempt that has not. An established connection survives the event; if the
+network really died, the socket fails on its own (the Host terminates it after two
+missed heartbeats, about 4 s) and the normal close/retry path runs with retries
+suspended while offline. Verified in a browser against the unpatched bundle with
+the same driver: original 3 aborts over two flaps, patched 0 — and an attempt that
+never became ready is still aborted in both.
+
+Client bundles are composed per request and served cache-busted, so this half of
+the fix is live on the next page load rather than at container start; the build
+still applies it for reproducibility. The needle-based `WARN:` gate fails the
+image build if a DSH bump moves the seams.
+
+### WebUI transfer size
+
+The WebUI shell renders in 2-3 s even on a phone, but its data (workspaces,
+sessions) follows seconds later. Measured on 2026-09-10 with a mobile-emulated
+browser at 412x915, slow 4G (1.6 Mbit/s, 200 ms RTT) and CPU throttled 4x:
+
+- DOMContentLoaded 2.4-3.5 s, but `load` 3.4-10.6 s on a warm reload, with 4-5
+  long tasks of up to 1341 ms blocking the main thread.
+- The single largest resource is `/plugins/??...` — the composed client plugin
+  bundle: **5.7 MB of JavaScript** in 46 modules, downloaded whole on every page
+  load and parsed before any session or workspace data can be requested.
+- The shell's own assets (vendor 740 KB, app 423 KB, CSS 67 KB decoded) carried
+  no cache headers at all, so ~390 KB gzip came down again on every reload.
+
+Two host-half patches close that, both applied at build time:
+
+- `patches/brotli-compression.mjs` inserts a brotli seat ahead of the shipped
+  gzip middleware (configured at level 1). A client offering `br` gets the same
+  bodies at brotli quality 6 — the plugin bundle drops from 1,639,165 to
+  1,152,095 bytes (-29.7%), `/api` JSON and hashed assets shrink too (session
+  list 423 KB decoded: 78 KB gzip -> 71 KB br). Server CPU per request for the
+  plugin bundle: 108 ms vs 46 ms for gzip-1, paid once per page load on a
+  resource the browser then caches immutably.
+- `patches/static-cache-headers.mjs` gives the dist its cache policy:
+  `/assets/...` and `/plugins/...` are `public, max-age=31536000, immutable`,
+  the rendered `index.html` stays `no-cache`, and every other dist file is
+  stored for a day and revalidated by `etag`/`last-modified` with a `304` — so a
+  warm reload re-fetches no shell asset at all.
+
+Deliberate difference to be aware of: for a client that offers *both* gzip and
+brotli, the seat finalizes the response, so bodies it declines (below the
+1024-byte threshold, non-200, or streamed through `res.write`) are sent
+uncompressed instead of gzip-1. Clients that do not offer brotli — gzip-only
+agents, older browsers — keep the completely untouched gzip path.
+
+Both patches are needle-based and fail-closed like the others: a DSH version
+bump that moves the seams makes the image build fail on the `WARN:` gate instead
+of silently serving gzip-1 again. After a rebuild, verify a running server shows
+`content-encoding: br` for `/plugins/??...` and `cache-control` on `/assets/...`,
+and confirm the same responses against a gzip-only client.
+
 ### Server memory and GC stalls
 
 `dsh web` is one Node process that owns every agent loop, the `/api` RPC surface
@@ -205,7 +283,7 @@ installed in the profile volume (e.g. `dsh-workspace`):
 
 | Path | Contents |
 | ---- | -------- |
-| Volume `dsh-data` -> `/data` | `$DSH_HOME`: profiles, installed plugins, `.credentials.yaml`, `.env` |
+| Volume `dsh-data` -> `/data` | `$DSH_HOME`: profiles, installed plugins, `settings.yaml`, `.credentials.yaml`, `.env` |
 | Volume `dsh-home` -> `/home/node` | Agent home: workspaces (the WebUI creates them here), `gh` auth, `.gitconfig`, tool caches |
 
 Everything outside these two volumes lives in the container layer and is lost
@@ -245,6 +323,13 @@ System packages belong in the `Dockerfile`; that is the only durable way.
 - `DEEPSEEK_BASE_URL` / `DSH_MODEL` / `DSH_SYSTEM_PROMPT` — optional dsh config
   overrides (commented out in `.env.example`; authoritative reference:
   `docs/config-catalog.md` in the dsh repo)
+- Model catalog and model selection live in `/data/settings.yaml`
+  (`llm-deepseek.models`, `agent-default-model`), not in the image. The file is
+  hot-reloaded, so edits apply without a restart.
+- Image input is declared per model in that catalog: a model entry without
+  `inputModalities: [text, image]` makes `read_image` refuse the request, even
+  when the model itself is multimodal. `imagePixelBudget` and `imageMaxBytes`
+  are only valid together with `image` in `inputModalities`.
 
 ## Git / GitHub in the container
 

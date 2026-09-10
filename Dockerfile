@@ -83,6 +83,43 @@ COPY patches/stream-stall-watchdog.mjs /usr/local/lib/dsh-patches/stream-stall-w
 RUN node /usr/local/lib/dsh-patches/stream-stall-watchdog.mjs "$(dirname "$(npm root -g)")" | tee /tmp/stall-watchdog.log \
     && ! grep -q 'WARN:' /tmp/stall-watchdog.log
 
+# Network-availability churn patch (client half, applied unconditionally at
+# build time). The client aborts its connection generation on every browser
+# offline/online event, so the routine `navigator.onLine` flapping of a phone
+# (Wi-Fi/cellular handover, radio sleep) costs a full reconnect — the WebUI shows
+# the reconnecting indicator although nothing was lost. The patch narrows that
+# abort to an attempt that has not delivered a connection yet; an established
+# socket now fails on its own instead. See README "Reconnecting indicator".
+# The client bundle is composed per request and served cache-busted, so this
+# half is live on the next page load — no container rebuild needed to test the
+# fix, while the build keeps it reproducible.
+COPY patches/network-availability-churn.mjs /usr/local/lib/dsh-patches/network-availability-churn.mjs
+RUN node /usr/local/lib/dsh-patches/network-availability-churn.mjs "$(dirname "$(npm root -g)")" | tee /tmp/network-churn.log \
+    && ! grep -q 'WARN:' /tmp/network-churn.log
+
+# Brotli compression patch (host half, applied unconditionally at build time).
+# The shipped gzip middleware runs at level 1, so every page load pulls 1.64 MB
+# for the client plugin bundle although the decoded body is 5.7 MB. The patch
+# inserts a brotli seat ahead of the gzip chain: a client offering `br` gets the
+# same body in 1.15 MB, every other client keeps the untouched gzip path. See
+# README "WebUI transfer size".
+# Fail-closed: any `WARN:` in the log (missing file, drifted needle, write
+# failure) fails the build, so an upstream bump cannot silently fall back to
+# gzip-1 without the build saying so.
+COPY patches/brotli-compression.mjs /usr/local/lib/dsh-patches/brotli-compression.mjs
+RUN node /usr/local/lib/dsh-patches/brotli-compression.mjs "$(dirname "$(npm root -g)")" | tee /tmp/brotli.log \
+    && ! grep -q 'WARN:' /tmp/brotli.log
+
+# Static-asset caching patch (host half, applied unconditionally at build time).
+# The dist server answers every asset without cache metadata, so the shell
+# (390 KB gzip of JS and CSS) is re-downloaded on every reload. The patch adds
+# the cache policy: content-addressed paths immutable, the rendered index
+# no-cache, everything else revalidated by an etag and a 304. See README
+# "WebUI transfer size".
+COPY patches/static-cache-headers.mjs /usr/local/lib/dsh-patches/static-cache-headers.mjs
+RUN node /usr/local/lib/dsh-patches/static-cache-headers.mjs "$(dirname "$(npm root -g)")" | tee /tmp/static-cache.log \
+    && ! grep -q 'WARN:' /tmp/static-cache.log
+
 # Telemetry off by default (upstream flipped the default to FEEDBACK_ONLY).
 # Override at runtime with an empty value: DSH_TELEMETRY_DISABLED=
 ENV DSH_TELEMETRY_DISABLED=1
