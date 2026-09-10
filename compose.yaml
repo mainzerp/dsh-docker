@@ -13,27 +13,35 @@ services:
       - "3080:3080"
     environment:
       # Runtime variables, passed through from the shell or .env when set.
-      # List syntax: a variable set in neither place is omitted entirely —
-      # never injected as an empty string that would shadow file-based
+      # Map syntax with null values: a variable set in neither place is omitted
+      # entirely — never injected as an empty string that would shadow file-based
       # credentials or git identities.
       # --- DeepSeek Harness ---
-      - DEEPSEEK_API_KEY
-      - DEEPSEEK_BASE_URL
-      - DSH_MODEL
-      - DSH_SYSTEM_PROMPT
+      DEEPSEEK_API_KEY:
+      DEEPSEEK_BASE_URL:
+      DSH_MODEL:
+      DSH_SYSTEM_PROMPT:
       # --- Additional model providers (referenced via apiKeyEnv) ---
-      - ANTHROPIC_API_KEY
-      - OPENAI_API_KEY
+      ANTHROPIC_API_KEY:
+      OPENAI_API_KEY:
       # --- WebUI / LAN access ---
-      - TRUSTED_HOSTS
-      - DSH_TELEMETRY_DISABLED
+      TRUSTED_HOSTS:
+      DSH_TELEMETRY_DISABLED:
       # --- GitHub / Git ---
-      - GH_TOKEN
-      - GITHUB_TOKEN
-      - GIT_AUTHOR_NAME
-      - GIT_AUTHOR_EMAIL
-      - GIT_COMMITTER_NAME
-      - GIT_COMMITTER_EMAIL
+      GH_TOKEN:
+      GITHUB_TOKEN:
+      GIT_AUTHOR_NAME:
+      GIT_AUTHOR_EMAIL:
+      GIT_COMMITTER_NAME:
+      GIT_COMMITTER_EMAIL:
+      # --- Node/V8 runtime ---
+      # Measured 2026-09-10 on this deployment: with Node's default heap ceiling
+      # (4288 MB) the process parks at the limit and runs an emergency
+      # stop-the-world full GC about once a minute, freezing the whole web event
+      # loop for 10-12 s (every HTTP request, agent loop and WebSocket stalls).
+      # Raising the ceiling lets V8 mark incrementally instead. See README
+      # "Server memory and GC stalls". Override from the shell/.env if needed.
+      NODE_OPTIONS: "${NODE_OPTIONS:---max-old-space-size=8192}"
     env_file:
       - path: .env
         required: false

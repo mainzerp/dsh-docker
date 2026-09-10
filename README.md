@@ -134,6 +134,50 @@ silently stops matching.
 After an update, reload an already open tab once: a cached old bundle treats
 the keepalive frame as an invalid carrier frame and reconnects once.
 
+### Server memory and GC stalls
+
+`dsh web` is one Node process that owns every agent loop, the `/api` RPC surface
+and the Remote-stream WebSocket. A long-running or large agent session pushes
+the process against Node's default V8 heap ceiling (4288 MB on this image).
+V8 then stops doing incremental marking and runs an emergency full GC on the
+main thread: measured on 2026-09-10 with a 2.6 GB live set and roughly 1.8 GB/min
+of garbage, RSS climbed to 4.3-4.5 GB within ~60 s and the event loop froze for
+10-12 s (11.4 s of main-thread CPU for an 11.2 s freeze), then RSS dropped back
+to 2.6 GB.
+
+During such a freeze every fresh request hangs: the session list, the subagent
+catalog (`POST /api/subagents/list`), opening a child session, sending a message.
+Already-loaded sessions keep switching because that is client-local state — the
+UI therefore looks "partially" frozen rather than dead.
+
+`compose.yaml` raises the ceiling:
+
+```yaml
+NODE_OPTIONS: "${NODE_OPTIONS:---max-old-space-size=8192}"
+```
+
+Verify by timing any request against the running server — even the trivial
+unauthenticated `401` shares the event loop, so a stall shows up here. Run it in
+the container (`docker compose exec dsh bash`):
+
+```
+for i in $(seq 1 300); do
+  curl -s -o /dev/null -w "%{time_total}\n" -m 40 -H "Host: 127.0.0.1:3081" \
+    http://127.0.0.1:3081/
+  sleep 0.3
+done | sort -n | tail -3
+```
+
+A healthy server stays in the low milliseconds (the tail may show a few hundred
+ms). Anything in the seconds is a freeze. Watch `VmRSS` in
+`/proc/$(pgrep -f 'dsh web' | head -1)/status` as well: it should plateau below
+the new ceiling instead of parking on it.
+
+If stalls persist with the larger heap, the live set itself is the lever — the
+host keeps the complete event log of every live session in memory, so a session
+with hundreds of thousands of events (this deployment had one at 457k) dominates
+RSS. Closing such a session in the UI (or archiving it) releases it.
+
 ### Upgrading to 0.1.2 with profile plugins
 
 0.1.2 tightened how the client module system identifies a plugin package, and
@@ -191,6 +235,10 @@ System packages belong in the `Dockerfile`; that is the only durable way.
   (passed through as a build arg), then `docker compose up -d --build`
 - `DSH_TELEMETRY_DISABLED` — image default `1` (telemetry off); set to an empty
   value to enable upstream telemetry
+- `NODE_OPTIONS` — Node/V8 flags for `dsh web`; compose sets
+  `--max-old-space-size=8192` by default (see "Server memory and GC stalls").
+  Raising it trades RAM for fewer GC freezes; keep the value below the memory
+  you are willing to give the container.
 - `GH_VERSION` — GitHub CLI version in the image (default in `Dockerfile`)
 - `PLAYWRIGHT_VERSION` — Playwright version for browser tooling (default in `Dockerfile`)
 - `UV_VERSION` — uv version in the image (default in `Dockerfile`)
