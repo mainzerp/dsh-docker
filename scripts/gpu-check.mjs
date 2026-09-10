@@ -18,7 +18,7 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { accessSync, constants, existsSync, readdirSync, statSync } from 'node:fs';
+import { accessSync, constants, existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -169,6 +169,60 @@ async function probe(chromium, args, url) {
   }
 }
 
+/** Recursively collects .js files (used for the Playwright bundle search). */
+function walkJs(dir, out = []) {
+  if (!existsSync(dir)) return out;
+  for (const name of readdirSync(dir)) {
+    if (name === '.bin' || name === '.cache') continue;
+    const path = join(dir, name);
+    let st;
+    try {
+      st = statSync(path);
+    } catch {
+      continue;
+    }
+    if (st.isDirectory()) walkJs(path, out);
+    else if (name.endsWith('.js')) out.push(path);
+  }
+  return out;
+}
+
+/** Reports whether the image's Playwright GPU patch is present. */
+function reportPatch() {
+  console.log('[3] Playwright GPU default patch');
+  let globalRoot;
+  try {
+    globalRoot = execFileSync('npm', ['root', '-g'], { encoding: 'utf8' }).trim();
+  } catch {
+    console.log('    FAIL  npm not available, cannot locate the global Playwright install');
+    return false;
+  }
+  const roots = readdirSync(globalRoot)
+    .filter((name) => name.includes('playwright'))
+    .map((name) => join(globalRoot, name));
+  if (roots.length === 0) {
+    console.log(`    FAIL  no playwright package under ${globalRoot}`);
+    return false;
+  }
+  const hits = [];
+  for (const bundle of roots.flatMap((dir) => walkJs(dir))) {
+    let text;
+    try {
+      text = readFileSync(bundle, 'utf8');
+    } catch {
+      continue;
+    }
+    if (text.includes('dsh-docker:chromium-gpu-default')) hits.push(bundle);
+  }
+  if (hits.length === 0) {
+    console.log('    FAIL  marker dsh-docker:chromium-gpu-default absent - plain launches stay on SwiftShader');
+    console.log('          (rebuild the image; a Playwright installed per project is never patched)');
+    return false;
+  }
+  for (const hit of hits) console.log(`    ok    patched: ${hit}`);
+  return true;
+}
+
 async function main() {
   const chromium = await loadChromium();
   console.log(`Chromium: ${chromium.executablePath()}`);
@@ -176,6 +230,7 @@ async function main() {
 
   const devicesOk = reportDevices();
   const userspaceOk = reportUserspace();
+  const patchOk = reportPatch();
 
   // Serve a page over http://127.0.0.1 so WebGPU sees a secure context.
   const server = createServer((_req, res) => {
@@ -185,7 +240,7 @@ async function main() {
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const url = `http://127.0.0.1:${server.address().port}/`;
 
-  console.log('\n[3] Chromium launch configurations');
+  console.log('\n[4] Chromium launch configurations');
   const results = [];
   try {
     for (const candidate of CANDIDATES) {
@@ -211,20 +266,27 @@ async function main() {
   }
 
   const working = results.filter((r) => r.hardware);
-  console.log('\n[4] Result');
+  const defaultOk = Boolean(results[0]?.hardware);
+  console.log('\n[5] Result');
   if (!devicesOk) {
     console.log('    FAIL  no usable DRM device (see [1])');
   }
   if (!userspaceOk) {
     console.log('    FAIL  incomplete GPU userspace (see [2])');
   }
-  if (working.length > 0) {
-    console.log(`    ok    hardware rendering with: ${working.map((r) => r.name).join(' | ')}`);
-    console.log('    note  pass these args to Playwright: chromium.launch({ args: [...] })');
+  if (!patchOk) {
+    console.log('    FAIL  Playwright default-argument patch missing (see [3])');
+  }
+  if (defaultOk) {
+    console.log('    ok    the default launch configuration renders on the GPU');
     process.exitCode = 0;
+  } else if (working.length > 0) {
+    console.log(`    FAIL  default launch is software; hardware needs explicit args: ${working.map((r) => r.name).join(' | ')}`);
+    console.log('    hint  pass those args to Playwright, or deploy an image whose default patch is applied');
+    process.exitCode = 1;
   } else {
     console.log('    FAIL  every configuration fell back to software rendering');
-    console.log('    hints: check [1]/[2] above; retry with GPU_CHECK_HEADFUL=1 xvfb-run -a node scripts/gpu-check.mjs;');
+    console.log('    hints: check [1]/[2]/[3] above; retry with GPU_CHECK_HEADFUL=1 xvfb-run -a node scripts/gpu-check.mjs;');
     console.log('           see README "GPU passthrough (Intel iGPU)" for the flag fallbacks');
     process.exitCode = 1;
   }

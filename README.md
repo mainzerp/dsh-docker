@@ -321,10 +321,26 @@ Both compose files pass the host's `/dev/dri` into the container and grant the
 of SwiftShader (CPU). The image provides the matching userspace: Mesa EGL/GLES
 (`libegl1`, `libegl-mesa0`, `libgles2`), the Intel ANV Vulkan ICD
 (`mesa-vulkan-drivers`) and `vulkaninfo`; the Mesa DRI drivers (`iris`, `i915`)
-arrive with Playwright's own dependencies. Playwright needs no special launch
-flags for this — it never passes `--disable-gpu`; its `--enable-unsafe-swiftshader`
-is only a fallback.
+arrive with Playwright's own dependencies. Plain `chromium.launch()` calls are
+accelerated as well, because the image patches Playwright's default Chromium
+arguments at build time (first bullet below); Playwright never passes
+`--disable-gpu`, and the `--enable-unsafe-swiftshader` it does add stays as the
+fallback path.
 
+- **Default-argument patch** (`patches/chromium-gpu-default.mjs`, applied by the
+  `Dockerfile`): Chromium picks no hardware backend by itself in this container —
+  measured with `/dev/dri` passed through, device nodes readable and the Intel
+  ICDs installed, a plain launch still reported SwiftShader while the same launch
+  with `--use-angle=gl-egl` reported the Intel iGPU. No environment variable
+  reaches that decision (`ANGLE_DEFAULT_PLATFORM` and `VK_ICD_FILENAMES` were both
+  measured ineffective) and Playwright has no environment hook for Chromium
+  arguments, so the patch appends `--use-angle=gl-egl`, gated on a runtime check
+  that the launching user can open `/dev/dri/renderD128`. A host without GPU
+  access keeps the stock SwiftShader fallback, and a project that passes its own
+  `--use-gl`/`--use-angle` wins unchanged. Only the global Playwright install is
+  patched: a workspace project that installs its own Playwright version must pass
+  `args: ['--use-angle=gl-egl']` itself. The patch is idempotent, and the image
+  build fails when its needle drifts (fail-closed).
 - Host prerequisite: `/dev/dri` (Intel or AMD iGPU with the `i915`/`amdgpu`
   kernel module). On a host without it, `docker compose up` fails with
   `error gathering device information`; remove the `devices:`/`group_add:`
@@ -347,14 +363,15 @@ is only a fallback.
   node scripts/gpu-check.mjs
   ```
 
-  It checks the devices and the userspace, then launches Chromium with several
-  flag sets and prints the WebGL renderer for each. Exit code 1 means software
-  rendering only. Expected renderer:
-  `ANGLE (Intel, Mesa Intel(R) UHD Graphics 770 (ADL-S GT1), OpenGL ...)`.
-- If every configuration still reports SwiftShader, use the flag set the script
-  marks as working, e.g.
-  `chromium.launch({ args: ['--use-gl=angle', '--use-angle=gl-egl'] })`, or run
-  the check headful under the image's `xvfb`
+  It checks the devices, the userspace and the patch marker, then launches
+  Chromium with several flag sets and prints the WebGL renderer for each. Exit
+  code 0 requires the **default** configuration (no extra flags) to render on the
+  GPU; exit code 1 means software rendering, a missing patch marker, or hardware
+  only reachable with explicit args. Expected renderer:
+  `ANGLE (Intel, Mesa Intel(R) UHD Graphics 770 (ADL-S GT1), OpenGL ES 3.2)`.
+- If the default configuration still reports SwiftShader, use the flag set the
+  script marks as working, e.g. `chromium.launch({ args: ['--use-angle=gl-egl'] })`,
+  or run the check headful under the image's `xvfb`
   (`GPU_CHECK_HEADFUL=1 xvfb-run -a node scripts/gpu-check.mjs`).
 - Without a GPU the same image keeps working: Chromium then falls back to
   SwiftShader as before. Hardware video decode (VA-API) is not installed.

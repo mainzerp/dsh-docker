@@ -115,6 +115,22 @@ RUN apt-get update \
        vulkan-tools \
     && rm -rf /var/lib/apt/lists/*
 
+# GPU default patch (applied unconditionally at build time).
+# Chromium picks no hardware backend on its own here: with /dev/dri passed
+# through, the device nodes readable and the Intel ICDs installed, a plain
+# Playwright launch still reported SwiftShader, while the same launch with
+# --use-angle=gl-egl reported the Intel iGPU. No environment variable reaches that
+# decision and Playwright offers no env hook for Chromium arguments, so the patch
+# appends --use-angle=gl-egl to its default arguments - gated on a runtime check
+# that the launching user can open /dev/dri/renderD128. A host without GPU access
+# keeps the stock SwiftShader fallback, and a project passing its own
+# --use-gl/--use-angle wins. See README "GPU passthrough (Intel iGPU)".
+# Fail-closed: any `WARN:` in the log (needle drift, write failure, patched file
+# that no longer parses) fails the build.
+COPY patches/chromium-gpu-default.mjs /usr/local/lib/dsh-patches/chromium-gpu-default.mjs
+RUN node /usr/local/lib/dsh-patches/chromium-gpu-default.mjs "$(dirname "$(npm root -g)")" | tee /tmp/gpu-patch.log \
+    && ! grep -q 'WARN' /tmp/gpu-patch.log
+
 ENV DSH_HOME=/data
 
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
