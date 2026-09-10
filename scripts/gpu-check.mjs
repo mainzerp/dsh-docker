@@ -79,6 +79,7 @@ function reportDevices() {
     return false;
   }
   let ok = true;
+  const denied = [];
   const entries = readdirSync(DRI_DIR).sort();
   if (entries.length === 0) {
     console.log(`    FAIL  ${DRI_DIR} is empty`);
@@ -94,11 +95,14 @@ function reportDevices() {
     } catch {
       access = 'DENIED';
       ok = false;
+      denied.push({ path, gid: st.gid });
     }
     console.log(`    ${access === 'rw' ? 'ok  ' : 'FAIL'}  ${path} mode=${mode} uid=${st.uid} gid=${st.gid} access=${access}`);
   }
-  if (!ok) {
-    console.log('    hint  add the owning GID to group_add in the compose file (host: stat -c %g /dev/dri/*)');
+  for (const device of denied) {
+    console.log(`    hint  ${device.path} belongs to group ${device.gid}, which this user is not in.`);
+    console.log('          Add that GID to group_add in the compose file and recreate the container:');
+    console.log(`            RENDER_GID=${device.gid}  in .env, then docker compose up -d --force-recreate`);
   }
   return ok;
 }

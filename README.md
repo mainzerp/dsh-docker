@@ -316,9 +316,9 @@ Preinstalled CLIs: `gh`, `jq`, `rg`, `ffmpeg`, `socat`, `bwrap` (bubblewrap),
 
 ### GPU passthrough (Intel iGPU)
 
-Both compose files pass the host's `/dev/dri` into the container and add the
-`video` group, so headless Chromium renders on the Intel iGPU instead of
-SwiftShader (CPU). The image provides the matching userspace: Mesa EGL/GLES
+Both compose files pass the host's `/dev/dri` into the container and grant the
+`video` and render groups, so headless Chromium renders on the Intel iGPU instead
+of SwiftShader (CPU). The image provides the matching userspace: Mesa EGL/GLES
 (`libegl1`, `libegl-mesa0`, `libgles2`), the Intel ANV Vulkan ICD
 (`mesa-vulkan-drivers`) and `vulkaninfo`; the Mesa DRI drivers (`iris`, `i915`)
 arrive with Playwright's own dependencies. Playwright needs no special launch
@@ -329,10 +329,18 @@ is only a fallback.
   kernel module). On a host without it, `docker compose up` fails with
   `error gathering device information`; remove the `devices:`/`group_add:`
   entries in that case.
-- `renderD*` is world-accessible (`0666`) per the systemd udev rule, so only
-  `card0` (`root:video 0660`) needs a group: `video` is GID 44 on Debian and
-  Ubuntu. If the host uses another GID, replace `video` with the numeric GID
-  from `stat -c %g /dev/dri/card0`.
+- Both nodes are `0660`, so both need a group. `card0` is `root:video`, and
+  `video` is GID 44 on Debian and Ubuntu alike. The render node
+  (`/dev/dri/renderD128`) is `root:render`, and the render GID is **not** fixed
+  across distributions — measured 109 on the reference host (Ubuntu 22.04), where
+  upstream systemd's `0666` default did not apply. Without that group the Intel
+  driver fails with `Unable to open device /dev/dri/renderD128: Permission denied`
+  and Chromium stays on SwiftShader. Look the GID up on the host and override it
+  if it differs from the default:
+
+  ```sh
+  stat -c '%g' /dev/dri/renderD128   # -> RENDER_GID in .env (default 109)
+  ```
 - Verify inside the container, from this repo checkout:
 
   ```sh
@@ -350,8 +358,8 @@ is only a fallback.
   (`GPU_CHECK_HEADFUL=1 xvfb-run -a node scripts/gpu-check.mjs`).
 - Without a GPU the same image keeps working: Chromium then falls back to
   SwiftShader as before. Hardware video decode (VA-API) is not installed.
-- Device passthrough only takes effect when the container is recreated
-  (`docker compose up -d --force-recreate`), which restarts `dsh web`.
+- Device passthrough and group membership only take effect when the container is
+  recreated (`docker compose up -d --force-recreate`), which restarts `dsh web`.
 
 ### Model providers
 

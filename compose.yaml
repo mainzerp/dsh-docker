@@ -57,17 +57,24 @@ services:
     # --- GPU passthrough (host Intel iGPU) ---
     # Headless Chromium (Playwright) renders on the iGPU instead of SwiftShader
     # once the DRM devices are visible and the image's Mesa/Vulkan userspace can
-    # open them. The systemd udev rule creates renderD* world-accessible (0666),
-    # but card0 is root:video 0660, hence the "video" group — GID 44 on Debian
-    # and Ubuntu. Needs a host with /dev/dri: on a host without it,
-    # `docker compose up` fails with "error gathering device information".
-    # If the host's video group uses another GID, or the render node is not 0666
-    # (check on the host: stat -c '%a %g' /dev/dri/*), use the numeric GID here.
+    # open them. Measured on the deployment host 2026-09-10: card0 is
+    # root:video 0660 (video = GID 44, identical on Debian and Ubuntu) and
+    # renderD128 is root:render 0660 - the upstream udev default of 0666 does not
+    # apply there, so the render GID has to be granted explicitly. Without it the
+    # Intel Vulkan/GL driver fails with
+    # "Unable to open device /dev/dri/renderD128: Permission denied".
+    # Look the GID up on the host: stat -c '%g' /dev/dri/renderD128
+    # (override via RENDER_GID in .env; 109 on the reference host).
+    # Needs a host with /dev/dri: on a host without it, `docker compose up` fails
+    # with "error gathering device information".
     # Verify inside the container: node scripts/gpu-check.mjs
     devices:
       - /dev/dri:/dev/dri
     group_add:
       - video
+      # Docker resolves group names against the image's /etc/group, which has no
+      # "render" group, so the render node's group must be passed numerically.
+      - "${RENDER_GID:-109}"
 
 volumes:
   dsh-data:
