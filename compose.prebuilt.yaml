@@ -49,6 +49,20 @@ services:
     restart: unless-stopped
     init: true
     shm_size: 1gb
+    # --- GPU passthrough (host Intel iGPU) ---
+    # Headless Chromium (Playwright) renders on the iGPU instead of SwiftShader
+    # once the DRM devices are visible and the image's Mesa/Vulkan userspace can
+    # open them. The systemd udev rule creates renderD* world-accessible (0666),
+    # but card0 is root:video 0660, hence the "video" group — GID 44 on Debian
+    # and Ubuntu. Needs a host with /dev/dri: on a host without it,
+    # `docker compose up` fails with "error gathering device information".
+    # If the host's video group uses another GID, or the render node is not 0666
+    # (check on the host: stat -c '%a %g' /dev/dri/*), use the numeric GID here.
+    # Verify inside the container: node scripts/gpu-check.mjs
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - video
 
 volumes:
   dsh-data:

@@ -98,6 +98,23 @@ RUN npm install -g "playwright@${PLAYWRIGHT_VERSION}" \
     && npx playwright install --with-deps chromium \
     && chmod -R a+rwX /ms-playwright
 
+# GPU userspace stack for the host iGPU, which compose passes through as /dev/dri.
+# Mesa's DRI drivers (iris for Intel Gen8+, i915, swrast) already arrive with
+# libgl1-mesa-dri via the Playwright deps above, but the layers that connect a GPU
+# client to them are missing:
+#   libegl1 + libegl-mesa0 -> Mesa EGL through glvnd (Chromium's ANGLE GL backend)
+#   libgles2               -> GLESv2 dispatch for the same path
+#   mesa-vulkan-drivers    -> Intel ANV Vulkan ICD (ANGLE's Vulkan backend)
+#   vulkan-tools           -> vulkaninfo, for verifying the passthrough
+# Without them Chromium cannot open the GPU and renders through SwiftShader (CPU).
+# Verify in the running container: node scripts/gpu-check.mjs
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+       libegl1 libegl-mesa0 libgles2 \
+       mesa-vulkan-drivers \
+       vulkan-tools \
+    && rm -rf /var/lib/apt/lists/*
+
 ENV DSH_HOME=/data
 
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh

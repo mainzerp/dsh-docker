@@ -314,6 +314,45 @@ Preinstalled CLIs: `gh`, `jq`, `rg`, `ffmpeg`, `socat`, `bwrap` (bubblewrap),
   ipafont-gothic (JP), wqy-zenhei (CN) and tlwg-loma (TH). For Korean or full
   CJK coverage add `fonts-noto-cjk` to the apt line in the `Dockerfile`.
 
+### GPU passthrough (Intel iGPU)
+
+Both compose files pass the host's `/dev/dri` into the container and add the
+`video` group, so headless Chromium renders on the Intel iGPU instead of
+SwiftShader (CPU). The image provides the matching userspace: Mesa EGL/GLES
+(`libegl1`, `libegl-mesa0`, `libgles2`), the Intel ANV Vulkan ICD
+(`mesa-vulkan-drivers`) and `vulkaninfo`; the Mesa DRI drivers (`iris`, `i915`)
+arrive with Playwright's own dependencies. Playwright needs no special launch
+flags for this — it never passes `--disable-gpu`; its `--enable-unsafe-swiftshader`
+is only a fallback.
+
+- Host prerequisite: `/dev/dri` (Intel or AMD iGPU with the `i915`/`amdgpu`
+  kernel module). On a host without it, `docker compose up` fails with
+  `error gathering device information`; remove the `devices:`/`group_add:`
+  entries in that case.
+- `renderD*` is world-accessible (`0666`) per the systemd udev rule, so only
+  `card0` (`root:video 0660`) needs a group: `video` is GID 44 on Debian and
+  Ubuntu. If the host uses another GID, replace `video` with the numeric GID
+  from `stat -c %g /dev/dri/card0`.
+- Verify inside the container, from this repo checkout:
+
+  ```sh
+  node scripts/gpu-check.mjs
+  ```
+
+  It checks the devices and the userspace, then launches Chromium with several
+  flag sets and prints the WebGL renderer for each. Exit code 1 means software
+  rendering only. Expected renderer:
+  `ANGLE (Intel, Mesa Intel(R) UHD Graphics 770 (ADL-S GT1), OpenGL ...)`.
+- If every configuration still reports SwiftShader, use the flag set the script
+  marks as working, e.g.
+  `chromium.launch({ args: ['--use-gl=angle', '--use-angle=gl-egl'] })`, or run
+  the check headful under the image's `xvfb`
+  (`GPU_CHECK_HEADFUL=1 xvfb-run -a node scripts/gpu-check.mjs`).
+- Without a GPU the same image keeps working: Chromium then falls back to
+  SwiftShader as before. Hardware video decode (VA-API) is not installed.
+- Device passthrough only takes effect when the container is recreated
+  (`docker compose up -d --force-recreate`), which restarts `dsh web`.
+
 ### Model providers
 
 Beyond DeepSeek, the Web UI (Settings -> Models) supports catalog providers
