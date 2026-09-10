@@ -373,6 +373,22 @@ fallback path.
   script marks as working, e.g. `chromium.launch({ args: ['--use-angle=gl-egl'] })`,
   or run the check headful under the image's `xvfb`
   (`GPU_CHECK_HEADFUL=1 xvfb-run -a node scripts/gpu-check.mjs`).
+- **Runs that bypass Playwright** (Puppeteer, or a Chrome started directly) are
+  never patched — pass the flag yourself and drop the software switches:
+
+  ```sh
+  /path/to/chrome --headless=new --no-sandbox --use-angle=gl-egl \
+    --remote-debugging-port=9222 URL
+  ```
+
+  Measured in this container with the Puppeteer-downloaded Chrome 152: with
+  `--disable-gpu --enable-unsafe-swiftshader` its GPU process reports
+  `--use-angle=swiftshader-webgl` and holds no open DRM file descriptor
+  (software); no flags at all is software as well, because Chromium selects no
+  hardware backend by itself here; `--use-angle=gl-egl` reports
+  `ANGLE (Intel, Mesa Intel(R) UHD Graphics 770 (ADL-S GT1), OpenGL ES 3.2)`.
+  Never combine an intent to use the GPU with `--disable-gpu`,
+  `--use-gl=swiftshader` or `--enable-unsafe-swiftshader`.
 - Without a GPU the same image keeps working: Chromium then falls back to
   SwiftShader as before. Hardware video decode (VA-API) is not installed.
 - Device passthrough and group membership only take effect when the container is
