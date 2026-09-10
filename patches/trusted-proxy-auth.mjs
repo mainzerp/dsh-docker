@@ -53,13 +53,30 @@
  *             (Dockerfile passes "$(dirname "$(npm root -g)")")
  *   --check   report only, write nothing
  *
- * Verified against dsh 0.1.2-rc.1 (bundle-verified 2026-09-10).
+ * Verified against dsh 0.1.2-rc.1 (bundle-verified 2026-09-10) in both global
+ * install layouts: the package's own dependency tree
+ * (`<prefix>/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/...`, the
+ * layout a global `npm install -g @deepseek-ai/dsh` produces) and a hoisted
+ * top-level scope directory.
  */
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { join, resolve } from 'node:path'
 
-const TARGET = 'node_modules/@deepseek-ai/dsh-client-connection/lib/index.js'
+const PACKAGE = 'dsh-client-connection'
 const MARKER = 'dsh-docker:trusted-proxy-auth'
+
+/**
+ * Resolve one bundle inside the installed dsh tree. A global install keeps the
+ * harness packages in the dsh package's own node_modules; a hoisted tree has
+ * them in the scope directory. Mirrors the sibling patches.
+ */
+function locateBundle(packageName, relative) {
+  const candidates = [
+    join(root, 'node_modules', '@deepseek-ai', 'dsh', 'node_modules', '@deepseek-ai', packageName, relative),
+    join(root, 'node_modules', '@deepseek-ai', packageName, relative)
+  ]
+  return candidates.find((candidate) => existsSync(candidate)) ?? candidates[1]
+}
 
 // Anchor: the browser-auth region's own constants (source:
 // packages/client/connection/src/browser-auth.ts). Stable, tab-free and unique
@@ -101,12 +118,12 @@ const args = process.argv.slice(2)
 const checkOnly = args.includes('--check')
 const prefix = args.find((arg) => !arg.startsWith('--'))
 const root = resolve(prefix ?? process.cwd())
-const target = resolve(root, TARGET)
+const target = locateBundle(PACKAGE, join('lib', 'index.js'))
 
 console.log(`${checkOnly ? 'Checking' : 'Patching'} ${target}`)
 
 if (!existsSync(target)) {
-  console.log(`WARN: ${target} not found — is @deepseek-ai/dsh-client-connection installed there?`)
+  console.log(`WARN: no @deepseek-ai/${PACKAGE} bundle under ${root}/node_modules — not an installed dsh tree?`)
   process.exit(0)
 }
 
