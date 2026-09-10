@@ -70,6 +70,26 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 RUN node /usr/local/lib/dsh-patches/enable-remote-configuration.mjs "$(dirname "$(npm root -g)")" | tee /tmp/patch.log \
     && ! grep -q 'WARN: browser isLoopback pattern not found' /tmp/patch.log
 
+# Reverse-proxy auth trust patch (host half, applied unconditionally at build
+# time; inert until the runtime env flag is set). Every Host RPC call, every
+# WebSocket stream and the index document itself sit behind one browser-session
+# gate: a per-process, shared `?token=` URL mints an HMAC cookie that is bound to
+# the exact request authority, so a cleared cookie or a changed authority
+# (https hostname vs. LAN ip:port) costs the 401 "dsh web authentication
+# required; reopen the URL printed by dsh web" until that URL is opened again.
+# A deployment that already authenticates at a reverse proxy therefore carries a
+# second gate it cannot use per user or revoke per client. The patch makes the
+# gate skippable per deployment (DSH_TRUST_REVERSE_PROXY_AUTH, optionally
+# hardened by DSH_PROXY_AUTH_SECRET plus a proxy-injected `x-dsh-proxy-auth`
+# header) while the Host/Origin trust fence stays in force. See README "Auth
+# behind an authenticating reverse proxy".
+# Fail-closed: any `WARN:` in the log (missing package, drifted needle, write
+# failure) fails the build, so an upstream bump cannot silently leave the flag
+# doing nothing.
+COPY patches/trusted-proxy-auth.mjs /usr/local/lib/dsh-patches/trusted-proxy-auth.mjs
+RUN node /usr/local/lib/dsh-patches/trusted-proxy-auth.mjs "$(dirname "$(npm root -g)")" | tee /tmp/proxy-auth.log \
+    && ! grep -q 'WARN:' /tmp/proxy-auth.log
+
 # Stream stall watchdog patch (both halves, applied unconditionally at build
 # time). 0.1.2 already heartbeats the Remote-stream WebSocket on the host, but
 # the browser cannot observe ping/pong and reconnects only on socket close, so a

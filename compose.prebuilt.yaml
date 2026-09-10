@@ -24,6 +24,11 @@ services:
       # --- WebUI / LAN access ---
       TRUSTED_HOSTS:
       DSH_TELEMETRY_DISABLED:
+      # Reverse-proxy auth trust: see compose.yaml and README "Auth behind an
+      # authenticating reverse proxy". Requires the trusted-proxy-auth patch
+      # (present in every image built from this repository).
+      DSH_TRUST_REVERSE_PROXY_AUTH:
+      DSH_PROXY_AUTH_SECRET:
       # --- GitHub / Git ---
       GH_TOKEN:
       GITHUB_TOKEN:

@@ -27,6 +27,15 @@ services:
       # --- WebUI / LAN access ---
       TRUSTED_HOSTS:
       DSH_TELEMETRY_DISABLED:
+      # Reverse-proxy auth trust (patches/trusted-proxy-auth.mjs): with
+      # DSH_TRUST_REVERSE_PROXY_AUTH truthy (1/true/yes/on) the image skips
+      # dsh's own browser-session gate, so the reverse proxy is the only
+      # authentication and the printed token URL is no longer needed. Set
+      # DSH_PROXY_AUTH_SECRET as well to require the proxy-injected
+      # `x-dsh-proxy-auth` header instead of trusting the network path.
+      # See README "Auth behind an authenticating reverse proxy".
+      DSH_TRUST_REVERSE_PROXY_AUTH:
+      DSH_PROXY_AUTH_SECRET:
       # --- GitHub / Git ---
       GH_TOKEN:
       GITHUB_TOKEN:

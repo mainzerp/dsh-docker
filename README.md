@@ -19,6 +19,10 @@ container logs and open one of the `dsh web (external):` lines:
 docker compose logs dsh | grep 'dsh web'
 ```
 
+Behind an authenticating reverse proxy this gate can be replaced by the proxy
+instead (`DSH_TRUST_REVERSE_PROXY_AUTH`) — see
+[Auth behind an authenticating reverse proxy](#auth-behind-an-authenticating-reverse-proxy).
+
 All runtime variables (see `.env.example`) are passed through from the shell
 environment as well as from `.env` (`GH_TOKEN=... docker compose up -d`);
 a variable set in neither place is omitted from the container entirely. Env
@@ -82,6 +86,55 @@ oauth2-proxy), and:
   publishing it at all
 - add the public hostname to `TRUSTED_HOSTS` (e.g. `dsh.example.com:443`)
 
+### Auth behind an authenticating reverse proxy
+
+dsh protects the WebUI with a per-launch token: `dsh web` prints one `?token=`
+URL per process, that URL mints an HMAC cookie bound to the exact request
+authority (`Host` including port), and both the index document and every `/api`
+request need it. The token is not per user and cannot be revoked per client;
+a cleared browser cookie or a second access authority
+(`https://dsh.example.com` vs. `http://192.168.1.10:3080`) means the 401
+`dsh web authentication required; reopen the URL printed by dsh web` until the
+printed URL is opened again.
+
+When a reverse proxy already authenticates the user, that second gate can be
+replaced by the proxy:
+
+```sh
+# .env
+DSH_TRUST_REVERSE_PROXY_AUTH=1
+```
+
+With the flag on, the WebUI opens at the plain root URL — no token URL, no
+cookie. What stays in force is the Host/Origin trust fence: a request still
+needs a loopback `Host` or a `TRUSTED_HOSTS` entry (mandatory for every
+non-loopback authority), and an attached `Origin` must equal that `Host`, so
+DNS-rebinding and cross-site requests stay refused with 403. Cookie minting
+keeps working, so the printed token URLs remain usable as a fallback.
+
+The flag removes authentication, not reachability: anyone who can reach port
+3080 can send a trusted `Host` header themselves. Reachability is therefore
+part of the security model — either restrict the published port to the proxy
+(bind `127.0.0.1:3080:3080`, attach the proxy to the container network, or
+firewall the port down to the proxy/VPN interface), or set
+`DSH_PROXY_AUTH_SECRET` and let the proxy inject `x-dsh-proxy-auth: <secret>`
+on every upstream request: without that header every request stays 401, so the
+port alone is no longer enough. Both variables are read when the process
+starts, so a change needs `docker compose up -d --force-recreate`.
+
+The patch is `patches/trusted-proxy-auth.mjs` (build-time, fail-closed, applied
+in the `Dockerfile`); with the flag unset the image behaves exactly like stock
+dsh.
+
+Smoke test after `docker compose up -d --build` (internal port 3081, a
+`TRUSTED_HOSTS` authority as `Host`) — 200 with the flag, 401 without it, and
+with `DSH_PROXY_AUTH_SECRET` set add `-H "x-dsh-proxy-auth: <secret>"`:
+
+```sh
+docker compose exec dsh sh -c \
+  'curl -s -o /dev/null -w "%{http_code}\n" -H "Host: dsh.example.com" http://127.0.0.1:3081/'
+```
+
 ### Remote configuration
 
 Before 0.1.2, dsh pinned the settings/credentials/agent-preset management
@@ -95,11 +148,12 @@ StefanKhor/deepseek-harness-docker, MIT). Settings therefore works from every
 authority in `TRUSTED_HOSTS` — the old `DSH_ALLOW_REMOTE_CONFIGURATION` flag
 is removed (it only gated the deleted server half and would be a no-op).
 
-Effective access control is `TRUSTED_HOSTS` + the per-launch token + any
-reverse proxy in front: anyone who can reach the WebUI (and holds the token)
-can read and change settings and credentials. Keep the authenticating
-reverse proxy from the previous section in place when exposing the UI beyond
-your own network.
+Effective access control is `TRUSTED_HOSTS` + the per-launch token (which can be
+replaced by an authenticating proxy — see "Auth behind an authenticating
+reverse proxy") + any reverse proxy in front: anyone who can reach the WebUI
+(and holds the token) can read and change settings and credentials. Keep the
+authenticating reverse proxy from the previous section in place when exposing
+the UI beyond your own network.
 
 ### WebUI downlink watchdog
 
@@ -308,6 +362,11 @@ System packages belong in the `Dockerfile`; that is the only durable way.
 - `DEEPSEEK_API_KEY` — required for model access and web search; read from `.env` or
   `/data/.env` / `/data/.credentials.yaml`
 - `TRUSTED_HOSTS` — see above
+- `DSH_TRUST_REVERSE_PROXY_AUTH` — `1/true/yes/on` skips dsh's own
+  browser-session gate so an authenticating reverse proxy is the only gate; see
+  "Auth behind an authenticating reverse proxy"
+- `DSH_PROXY_AUTH_SECRET` — optional hardening for the flag above: requests pass
+  only with the proxy-injected header `x-dsh-proxy-auth: <secret>`
 - `DSH_PORT` — external port inside the container (default 3080)
 - `DSH_VERSION` — pin the npm version: set `DSH_VERSION=0.1.2-rc.1` in `.env`
   (passed through as a build arg), then `docker compose up -d --build`
