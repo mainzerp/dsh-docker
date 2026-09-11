@@ -266,6 +266,73 @@ of silently serving gzip-1 again. After a rebuild, verify a running server shows
 `content-encoding: br` for `/plugins/??...` and `cache-control` on `/assets/...`,
 and confirm the same responses against a gzip-only client.
 
+### Previewing a page in the container
+
+The agent runs inside the container, so a page it produces (a built site, a report,
+a game, a running dev server) is normally unreachable from your browser: only the
+DSH port is published. The image ships the `show_website` host plugin for that,
+which mounts a local file, a directory, or a running server on the DSH origin
+under `/preview/<id>/`.
+
+**It is shipped ready to load, not registered.** Nothing is active until you add
+the two lines below to `$DSH_HOME/profiles/web/cordis.patch.yml`
+(`/data/profiles/web/cordis.patch.yml` on the volume):
+
+```yaml
+- insert:
+    - id: show-website
+      name: /usr/local/share/dsh-plugins/show-website/index.mjs
+```
+
+The path must stay absolute: a `./plugins/...` name is resolved relative to the
+patch file (inside the volume), not to the image. After the edit, reload is live
+(`patchReload: live`) — no container restart needed. A broken row added by a live
+edit is logged and rolled back; keep an eye on the container log the first time.
+
+Why not on by default: every layer of a profile composes into **one** transactional
+loader update, so a single bad row — an import error, a missing `apply`, or an
+unmet `inject` — makes `dsh web` exit 1. As PID 1 under `restart: unless-stopped`
+with a persistent volume that is a crash loop with nothing served, and a plugin
+tracking harness-internal APIs is exactly the row that can go bad on a routine dsh
+update. To switch it off again, either delete the row or keep it and add
+`- id: show-website` / `disabled: true` (machine-wide: `$DSH_HOME/cordis.patch.yml`,
+which outranks the profile layer). A patch can only override a row's `config` and
+`disabled` — it cannot swap the module behind it.
+
+Agent usage:
+
+```text
+show_website({ id: "game", dir: "/abs/path/to/dist" })          # static files
+show_website({ id: "game", target: "http://127.0.0.1:5273" })   # running server, WebSocket proxied
+show_website({ action: "list" })                                # published previews
+show_website({ action: "close", id: "game" })
+```
+
+A dev server that emits root-absolute URLs needs its base to match the mount
+(`vite --base=/preview/game/ --port 5273 --strictPort`); a server that serves at
+its own root takes `strip_prefix: true`.
+
+**Access control.** `patches/preview-auth-gate.mjs` puts preview routes behind the
+same verdict as `/api` (`connection.requestRejection`, i.e. the Host/Origin trust
+fence plus the launch-token cookie), for HTTP and for WebSocket upgrades, and
+answers 503 rather than serving when that service is unavailable. Before that patch
+a published preview was readable by anyone who could reach the port, with no cookie
+and not even a `Host` check. Two limits remain:
+
+- With `DSH_TRUST_REVERSE_PROXY_AUTH=1` and no `DSH_PROXY_AUTH_SECRET`, previews are
+  reachable exactly like `/api` and the index: the reverse proxy is the only
+  authentication. That is already true of the whole WebUI in that mode.
+- In proxy mode the target is **any** HTTP host the container can reach — not just
+  loopback — and requests are forwarded verbatim, methods and bodies included.
+  The target is documented in the `list` output; treat the tool as "publish to
+  whoever can reach my DSH port".
+
+An older copy of this plugin may still sit in the volume
+(`/data/profiles/web/plugins/show-website/`). A volume row that names that relative
+path keeps loading the volume copy; registration is not deduplicated by name, so
+point the row at the image path (or delete the volume copy) to get the version
+that ships with the image.
+
 ### Server memory and GC stalls
 
 `dsh web` is one Node process that owns every agent loop, the `/api` RPC surface
@@ -347,11 +414,19 @@ on recreation (`--force-recreate`, image updates). Keep all mutable state under
 Install plugins with `docker compose exec dsh dsh plugin --profile web add <pkg>`;
 they live in `/data/profiles/web/` and survive container restarts and image rebuilds.
 
+The image also carries plugin **code** that is not registered anywhere:
+`/usr/local/share/dsh-plugins/` (see
+[Previewing a page in the container](#previewing-a-page-in-the-container)). It is
+part of the container layer, so an image update replaces it, and an existing
+volume's profile is never rewritten to point at it — activation is a profile-patch
+edit by the operator.
+
 Runtime package installation:
 
 | Kind | Installable at runtime? | Survives restart? | Survives rebuild? |
 | ---- | ----------------------- | ----------------- | ----------------- |
 | dsh plugins | Yes | Yes (volume) | Yes |
+| Shipped, unregistered plugin code in `/usr/local/share/dsh-plugins/` | No — part of the image | — | Yes (replaced by the new image) |
 | npm/pnpm packages in workspace | Yes | Yes (volume) | Yes |
 | System packages (`apt`) | No — container runs as unprivileged `node` user | — | — |
 

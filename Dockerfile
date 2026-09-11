@@ -140,6 +140,42 @@ COPY patches/static-cache-headers.mjs /usr/local/lib/dsh-patches/static-cache-he
 RUN node /usr/local/lib/dsh-patches/static-cache-headers.mjs "$(dirname "$(npm root -g)")" | tee /tmp/static-cache.log \
     && ! grep -q 'WARN:' /tmp/static-cache.log
 
+# Preview-route auth gate (host half, applied unconditionally at build time).
+# The browser-session gate is called only by the index document and the /api
+# routes; a preview plugin registers its own prefix route under /preview/<id>
+# whose handler owns the whole response and never consults the gate. Measured on
+# dsh 0.1.2-rc.1 (2026-09-11): GET /preview/<id>/ answers 200 without a cookie
+# and without a token, and it does not even pass the Host/Origin trust fence
+# (the same request with a foreign Host also answers 200, while /api answers
+# 403). The patch routes HTTP requests and WebSocket upgrades whose pathname is a
+# registered /preview prefix through the connection service's own verdict: 401/403
+# exactly like /api, 503 when the connection service is absent — there is no open
+# mode. Requests outside a registered preview prefix are untouched. See README
+# "Previewing a page in the container".
+# Must run AFTER the brotli patch: both rewrite dsh-host-webserver/lib/index.js,
+# and needle matching is order-sensitive by design (measured: needles stay unique
+# in either order, the sequence is pinned to keep it that way).
+# Fail-closed: any `WARN:` in the log (needle drift, missing package, malformed
+# replacement, write failure) fails the build.
+COPY patches/preview-auth-gate.mjs /usr/local/lib/dsh-patches/preview-auth-gate.mjs
+RUN node /usr/local/lib/dsh-patches/preview-auth-gate.mjs "$(dirname "$(npm root -g)")" | tee /tmp/preview-gate.log \
+    && ! grep -q 'WARN:' /tmp/preview-gate.log
+
+# Preview plugin (show_website), shipped ready to load but NOT registered: no
+# profile row is added for the operator. The web profile lives in the dsh-data
+# volume and `dsh` never overwrites an initialized profile, so an image can only
+# provide the code; the README documents the two lines that activate it in
+# $DSH_HOME/profiles/web/cordis.patch.yml.
+# Why not registered by default: every layer of a profile is one transactional
+# loader update, so a single bad row (import error, missing `apply`, an unmet
+# `inject`) makes `dsh web` exit 1 — PID 1 under `restart: unless-stopped`, i.e.
+# a crash loop with the volume persistent and nothing served. A plugin that
+# tracks internal APIs must not be able to do that to a deployment that never
+# asked for it. See README "Previewing a page in the container".
+# Location is load-bearing: the profile patch must name the ABSOLUTE path
+# (a `./`-relative name would resolve inside the volume).
+COPY plugins/show-website /usr/local/share/dsh-plugins/show-website
+
 # Telemetry off by default (upstream flipped the default to FEEDBACK_ONLY).
 # Override at runtime with an empty value: DSH_TELEMETRY_DISABLED=
 ENV DSH_TELEMETRY_DISABLED=1
