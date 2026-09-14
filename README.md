@@ -42,12 +42,17 @@ built on every release). Version pinning works via the image tag — the `DSH_VE
 `GH_VERSION` / `PLAYWRIGHT_VERSION` / `UV_VERSION` build args only apply to the local
 build in `compose.yaml`.
 
-A scheduled workflow (`.github/workflows/dsh-update.yml`, daily) rebuilds the image
-automatically when a new `@deepseek-ai/dsh` version appears on npm (the `latest`
-dist-tag tracks the release channel), publishing
-`latest` + `dsh-<version>` tags (e.g. `dsh-0.1.2-rc.1`). Pin to a specific dsh
-version via `image: ghcr.io/mainzerp/dsh-docker:dsh-<version>` in
-`compose.prebuilt.yaml`; `latest` always tracks the newest dsh release.
+A scheduled workflow (`.github/workflows/dsh-update.yml`, daily) publishes
+`latest` + `dsh-<version>` tags once a new `@deepseek-ai/dsh` version becomes the
+npm `latest` dist-tag and no `dsh-<version>` image exists yet, passing that
+version as the `DSH_VERSION` build arg; a version that only reaches the `next` or
+`alpha` dist-tag never triggers a build. Pin to a specific dsh version via
+`image: ghcr.io/mainzerp/dsh-docker:dsh-<version>` in `compose.prebuilt.yaml`
+(e.g. `dsh-0.1.5-rc.1`). The release workflow (`.github/workflows/docker.yml`)
+also pushes `latest`, built from the `Dockerfile` `DSH_VERSION` default and never
+tagged `dsh-<version>`, so `latest` is whichever of the two workflows ran last and
+is not guaranteed to be the newest dsh release — pin the `dsh-<version>` tag when
+the version matters.
 
 ## LAN access
 
@@ -181,7 +186,7 @@ time (both halves are required, the build fails on any `WARN:` in the log):
 Keep the stall threshold comfortably above `websocketHeartbeatIntervalMs`
 (15x at the defaults). If you raise the heartbeat interval in the plugin
 config, raise `__DSH_STREAM_STALL_MS` in the same ratio. The needle-based patch
-is verified against dsh 0.1.2-rc.1; a DSH version bump that changes these
+is verified against dsh 0.1.5-rc.2; a DSH version bump that changes these
 bundles fails the image build on purpose, so the patch is re-checked before it
 silently stops matching.
 
@@ -227,32 +232,33 @@ image build if a DSH bump moves the seams.
 
 ### WebUI transfer size
 
-The WebUI shell renders in 2-3 s even on a phone, but its data (workspaces,
-sessions) follows seconds later. Measured on 2026-09-10 with a mobile-emulated
-browser at 412x915, slow 4G (1.6 Mbit/s, 200 ms RTT) and CPU throttled 4x:
-
-- DOMContentLoaded 2.4-3.5 s, but `load` 3.4-10.6 s on a warm reload, with 4-5
-  long tasks of up to 1341 ms blocking the main thread.
-- The single largest resource is `/plugins/??...` — the composed client plugin
-  bundle: **5.7 MB of JavaScript** in 46 modules, downloaded whole on every page
-  load and parsed before any session or workspace data can be requested.
-- The shell's own assets (vendor 740 KB, app 423 KB, CSS 67 KB decoded) carried
-  no cache headers at all, so ~390 KB gzip came down again on every reload.
+The WebUI shell renders quickly even on a phone, but its data (workspaces,
+sessions) follows seconds later: the single largest resource is `/plugins/??...`
+— the composed client plugin bundle — which is multi-megabyte, downloaded whole
+on every page load and parsed before any session or workspace data can be
+requested. The shell's own assets (vendor, app, CSS) carried no cache headers at
+all, so they came down again on every reload.
 
 Two host-half patches close that, both applied at build time:
 
 - `patches/brotli-compression.mjs` inserts a brotli seat ahead of the shipped
   gzip middleware (configured at level 1). A client offering `br` gets the same
-  bodies at brotli quality 6 — the plugin bundle drops from 1,639,165 to
-  1,152,095 bytes (-29.7%), `/api` JSON and hashed assets shrink too (session
-  list 423 KB decoded: 78 KB gzip -> 71 KB br). Server CPU per request for the
-  plugin bundle: 108 ms vs 46 ms for gzip-1, paid once per page load on a
-  resource the browser then caches immutably.
+  bodies at brotli quality 6 — the plugin bundle, `/api` JSON and hashed assets
+  all shrink, at a CPU cost paid once per page load on a resource the browser
+  then caches immutably.
 - `patches/static-cache-headers.mjs` gives the dist its cache policy:
   `/assets/...` and `/plugins/...` are `public, max-age=31536000, immutable`,
   the rendered `index.html` stays `no-cache`, and every other dist file is
   stored for a day and revalidated by `etag`/`last-modified` with a `304` — so a
   warm reload re-fetches no shell asset at all.
+
+The figures this section previously quoted — shell render timing on a throttled
+mobile profile, the composed bundle's module count and byte size, the gzip/brotli
+size pair and the per-request server CPU — were measured against the 0.1.2-rc.1
+build, whose client bundle composition the 0.1.5 Web rework changes (the composed
+bundle gained the right-Sidebar, file-upload and workspace-file modules). They are
+pending re-measurement against the rebuilt image and are deliberately not carried
+over.
 
 Deliberate difference to be aware of: for a client that offers *both* gzip and
 brotli, the seat finalizes the response, so bodies it declines (below the
@@ -343,6 +349,10 @@ main thread: measured on 2026-09-10 with a 2.6 GB live set and roughly 1.8 GB/mi
 of garbage, RSS climbed to 4.3-4.5 GB within ~60 s and the event loop froze for
 10-12 s (11.4 s of main-thread CPU for an 11.2 s freeze), then RSS dropped back
 to 2.6 GB.
+
+These figures describe Node's garbage-collection behaviour and this deployment's
+session data, not a dsh version, so the pin bump does not invalidate them; they
+are re-checked with the loop below after each rebuild.
 
 During such a freeze every fresh request hangs: the session list, the subagent
 catalog (`POST /api/subagents/list`), opening a child session, sending a message.
@@ -443,7 +453,7 @@ System packages belong in the `Dockerfile`; that is the only durable way.
 - `DSH_PROXY_AUTH_SECRET` — optional hardening for the flag above: requests pass
   only with the proxy-injected header `x-dsh-proxy-auth: <secret>`
 - `DSH_PORT` — external port inside the container (default 3080)
-- `DSH_VERSION` — pin the npm version: set `DSH_VERSION=0.1.2-rc.1` in `.env`
+- `DSH_VERSION` — pin the npm version: set `DSH_VERSION=0.1.5-rc.2` in `.env`
   (passed through as a build arg), then `docker compose up -d --build`
 - `DSH_TELEMETRY_DISABLED` — image default `1` (telemetry off); set to an empty
   value to enable upstream telemetry
@@ -451,6 +461,9 @@ System packages belong in the `Dockerfile`; that is the only durable way.
   `--max-old-space-size=8192` by default (see "Server memory and GC stalls").
   Raising it trades RAM for fewer GC freezes; keep the value below the memory
   you are willing to give the container.
+- `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY` — outbound network
+  proxy, honored by dsh for its own requests and used by `dsh plugin` installs
+  (pnpm), `gh` and `git`; unset = no proxy (both compose files pass them through)
 - `GH_VERSION` — GitHub CLI version in the image (default in `Dockerfile`)
 - `PLAYWRIGHT_VERSION` — Playwright version for browser tooling (default in `Dockerfile`)
 - `UV_VERSION` — uv version in the image (default in `Dockerfile`)
@@ -625,10 +638,13 @@ reference them via `apiKeyEnv` (see `.env.example`).
 ### Sandboxing
 
 dsh confines agent subprocesses with bubblewrap (preferred; apt-installed in
-the image) and falls back to the `landlock-run` launcher, whose prebuilt
-binaries ship with the npm package (platform-restricted optional deps of
-`@deepseek-ai/dsh-sandbox-local` — installed by the default
-`npm install -g`, no image support needed). Enforcement is fail-closed and
+the image) and falls back to the Landlock launcher, whose prebuilt binaries ship
+with the npm package (platform-restricted optional deps of
+`@deepseek-ai/node-addon-system`, a plain dependency of
+`@deepseek-ai/dsh-sandbox-local` — installed by the default `npm install -g`, no
+image support needed). Up to 0.1.2 that package was
+`@deepseek-ai/node-addon-landlock-run`, so an image that installs with
+`--omit=optional` loses the fallback either way. Enforcement is fail-closed and
 depends on the host: landlock needs kernel 5.13+ with Landlock enabled and a
 Docker seccomp profile that permits the `landlock_*` syscalls (current Docker
 does); bubblewrap needs user-namespace support, which some Docker setups

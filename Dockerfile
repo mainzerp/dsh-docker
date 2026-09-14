@@ -145,15 +145,13 @@ RUN node /usr/local/lib/dsh-patches/static-cache-headers.mjs "$(dirname "$(npm r
 # Preview-route auth gate (host half, applied unconditionally at build time).
 # The browser-session gate is called only by the index document and the /api
 # routes; a preview plugin registers its own prefix route under /preview/<id>
-# whose handler owns the whole response and never consults the gate. Measured on
-# dsh 0.1.2-rc.1 (2026-09-11): GET /preview/<id>/ answers 200 without a cookie
-# and without a token, and it does not even pass the Host/Origin trust fence
-# (the same request with a foreign Host also answers 200, while /api answers
-# 403). The patch routes HTTP requests and WebSocket upgrades whose pathname is a
-# registered /preview prefix through the connection service's own verdict: 401/403
-# exactly like /api, 503 when the connection service is absent — there is no open
-# mode. Requests outside a registered preview prefix are untouched. See README
-# "Previewing a page in the container".
+# whose handler owns the whole response and never consults the gate, so a
+# published preview is reachable without a cookie and without passing the
+# Host/Origin trust fence. The patch routes HTTP requests and WebSocket upgrades
+# whose pathname is a registered /preview prefix through the connection
+# service's own verdict: 401/403 exactly like /api, 503 when the connection
+# service is absent — there is no open mode. Requests outside a registered
+# preview prefix are untouched. See README "Previewing a page in the container".
 # Must run AFTER the brotli patch: both rewrite dsh-host-webserver/lib/index.js,
 # and needle matching is order-sensitive by design (measured: needles stay unique
 # in either order, the sequence is pinned to keep it that way).
