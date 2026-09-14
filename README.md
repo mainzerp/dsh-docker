@@ -318,12 +318,20 @@ A dev server that emits root-absolute URLs needs its base to match the mount
 (`vite --base=/preview/game/ --port 5273 --strictPort`); a server that serves at
 its own root takes `strip_prefix: true`.
 
+This does not overlap with the 0.1.5 right Sidebar, which previews Markdown, code,
+HTML, PDF and images from a session's own files. `show_website` is for what a file
+view cannot do: publish a *running* process, with its WebSocket upgrades, on the
+one origin your browser can reach.
+
 **Access control.** `patches/preview-auth-gate.mjs` puts preview routes behind the
 same verdict as `/api` (`connection.requestRejection`, i.e. the Host/Origin trust
 fence plus the launch-token cookie), for HTTP and for WebSocket upgrades, and
 answers 503 rather than serving when that service is unavailable. Before that patch
 a published preview was readable by anyone who could reach the port, with no cookie
-and not even a `Host` check. Two limits remain:
+and not even a `Host` check. The patch stays necessary on 0.1.5: re-measured on
+2026-09-14 against dsh 0.1.5-rc.2, a registered `/preview/<id>/` route still answers
+200 without a cookie and still answers 200 with a foreign `Host` header, while the
+same prefix shape is what this plugin registers. Two limits remain:
 
 - With `DSH_TRUST_REVERSE_PROXY_AUTH=1` and no `DSH_PROXY_AUTH_SECRET`, previews are
   reachable exactly like `/api` and the index: the reverse proxy is the only
@@ -408,6 +416,26 @@ installed in the profile volume (e.g. `dsh-workspace`):
   ```
 
   `CI=true` avoids pnpm's "Aborted removal of modules directory due to no TTY".
+
+### Upgrading to 0.1.5 with profile plugins
+
+0.1.5 reworked the Web client and changed the web plugin panel API: the former
+`conversation` slot moved to the `conversation` key under `main`, plugins register
+global panels through `sidebar.panellist`, and the Agent API dropped `ctx.agent`
+(callers pass the Agent explicitly). `Inbox` became a type-only interface.
+
+The plugin this image ships (`plugins/show-website`) was verified against
+0.1.5-rc.2 on 2026-09-14 and needs no change: it loads, its `apply` runs to
+completion (including `ctx.tools.register`), and every API it calls still exists —
+`webServer.register` / `webServer.registerUpgrade` keep the `kind: 'prefix'`
+contract, and `fs.processPath`, `fs.stat`, `fs.resolve`, `fs.readBytes`,
+`fs.contains`, `subprocess.spawn` and `subprocess.resolveExecutable` are all
+present. It does not use any of the removed surfaces.
+
+A plugin in the profile volume that registers a client panel still needs checking
+against the new slot layout; the profile is not rewritten by the image, so verify
+its panel after the upgrade and refresh it with the `dsh plugin install` command
+above when it does not appear.
   `dsh-workspace` main is at 1.1.0 and targets 0.1.2.
 
 ## Persistence
