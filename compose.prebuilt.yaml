@@ -42,6 +42,13 @@ services:
       # stop-the-world full GC about once a minute, freezing the whole web event
       # loop for 10-12 s. See README "Server memory and GC stalls".
       NODE_OPTIONS: "${NODE_OPTIONS:---max-old-space-size=8192}"
+      # --- Outbound network proxy ---
+      # See compose.yaml: dsh's outbound proxy variables (0.1.5+); unset = no
+      # proxy.
+      HTTP_PROXY:
+      HTTPS_PROXY:
+      ALL_PROXY:
+      NO_PROXY:
     env_file:
       - path: .env
         required: false

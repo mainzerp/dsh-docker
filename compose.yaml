@@ -3,7 +3,7 @@ services:
     build:
       context: .
       args:
-        DSH_VERSION: ${DSH_VERSION:-0.1.2-rc.1}
+        DSH_VERSION: ${DSH_VERSION:-0.1.5-rc.2}
         GH_VERSION: ${GH_VERSION:-2.97.0}
         PLAYWRIGHT_VERSION: ${PLAYWRIGHT_VERSION:-1.62.1}
         UV_VERSION: ${UV_VERSION:-0.12.5}
@@ -51,6 +51,15 @@ services:
       # Raising the ceiling lets V8 mark incrementally instead. See README
       # "Server memory and GC stalls". Override from the shell/.env if needed.
       NODE_OPTIONS: "${NODE_OPTIONS:---max-old-space-size=8192}"
+      # --- Outbound network proxy ---
+      # Honored by dsh 0.1.5 for its outbound requests; pnpm (`dsh plugin`), gh
+      # and git inside the container use them too. Unrelated to the reverse-proxy
+      # auth above. A variable set in neither the shell nor .env stays omitted
+      # entirely, exactly like every other entry in this map.
+      HTTP_PROXY:
+      HTTPS_PROXY:
+      ALL_PROXY:
+      NO_PROXY:
     env_file:
       - path: .env
         required: false
